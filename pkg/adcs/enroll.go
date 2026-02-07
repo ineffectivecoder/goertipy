@@ -73,6 +73,10 @@ type EnrollOptions struct {
 	// Use named pipe transport (ncacn_np) instead of EPM/TCP
 	UsePipe bool
 
+	// ProxyURL is a SOCKS5 proxy URL (e.g., socks5://127.0.0.1:1080)
+	// Used for LDAP and HTTP transports only (RPC does not support proxying)
+	ProxyURL string
+
 	// Debug output
 	Debug bool
 }

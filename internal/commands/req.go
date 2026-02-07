@@ -24,6 +24,7 @@ type ReqFlags struct {
 	// Transport
 	WebURL  string // HTTP/HTTPS enrollment URL
 	UsePipe bool   // Use named pipe (SMB) transport
+	Proxy   string // SOCKS5 proxy URL
 
 	// Auth
 	Username string
@@ -73,6 +74,7 @@ Can also retrieve pending certificates by request ID.`,
 	cmd.Flags().StringVar(&reqFlags.DCIP, "dc-ip", "", "Domain Controller / CA server IP")
 	cmd.Flags().StringVar(&reqFlags.WebURL, "web", "", "HTTP/HTTPS enrollment URL (e.g., http://ca.corp.local)")
 	cmd.Flags().BoolVar(&reqFlags.UsePipe, "pipe", false, "Use SMB named pipe transport (port 445)")
+	cmd.Flags().StringVar(&reqFlags.Proxy, "proxy", "", "SOCKS5 proxy URL (e.g., socks5://127.0.0.1:1080)")
 
 	// Auth flags
 	cmd.Flags().StringVarP(&reqFlags.Username, "username", "u", "", "Username")
@@ -208,6 +210,7 @@ func requestCert(log *goertipylog.Logger, ntHash string) error {
 		KeySize:      reqFlags.KeySize,
 		OutputPrefix: reqFlags.Output,
 		UsePipe:      reqFlags.UsePipe,
+		ProxyURL:     reqFlags.Proxy,
 		Debug:        reqFlags.Debug,
 	})
 	if err != nil {
@@ -305,6 +308,7 @@ func requestCertHTTP(log *goertipylog.Logger, ntHash string) error {
 		Domain:       reqFlags.Domain,
 		KeySize:      reqFlags.KeySize,
 		OutputPrefix: reqFlags.Output,
+		ProxyURL:     reqFlags.Proxy,
 		Debug:        reqFlags.Debug,
 	})
 	if err != nil {

@@ -12,11 +12,13 @@ An Active Directory Certificate Services (AD CS) enumeration and exploitation to
 - **Certificate Enrollment** — Request certs via RPC (ICertPassage), HTTP/HTTPS (certsrv), or SMB named pipe
 - **PKINIT Authentication** — Authenticate with certificates, recover NT hashes (UnPAC-the-Hash)
 - **Certificate Inspection** — Inspect PFX/PEM certificates locally (subject, EKUs, SANs, key size)
-- **CA Backup** — Fetch CA public certificate from LDAP
-- **Template Modification** — ESC4 exploitation: modify template → ESC1, request cert, restore original
+- **CA Administration** — Dump CA config, revoke certs, manage templates via DCOM (ICertAdminD/D2)
+- **Remote Registry Fallback** — Retrieve CA policy flags (EditFlags, RequestDisposition) via RRP when DCOM fails
+- **Template Management** — Enable/disable templates on the CA, ESC4 exploitation (modify → ESC1 → restore)
 - **Golden Certificate Forgery** — Forge certs as any user using a stolen CA private key
 - **Security Descriptor Parsing** — Full Windows ACL/ACE/SID parsing with permission analysis
 - **Pass-the-Hash** — NTLM hash authentication on all commands via `--hashes LM:NT`
+- **SOCKS Proxy Support** — Route all traffic through SOCKS5 proxies (e.g., Chisel, proxychains)
 - **Library-First Design** — All functionality available as importable Go packages
 
 ## Installation
@@ -43,6 +45,11 @@ go build -o goertipy ./cmd/goertipy
 | `template` | Modify/restore certificate templates (ESC4 exploitation) |
 | `cert show` | Inspect PFX/PEM certificate details |
 | `ca backup` | Backup CA public certificate from LDAP |
+| `ca config` | Dump CA configuration (DCOM + RRP fallback) |
+| `ca revoke` | Revoke a certificate by serial number |
+| `ca list-templates` | List templates enabled on the CA |
+| `ca enable-template` | Enable a template on the CA |
+| `ca disable-template` | Disable a template on the CA |
 | `forge` | Golden certificate forgery |
 
 ## Usage
@@ -192,23 +199,40 @@ Displays: Subject, Issuer, Serial, Validity, Signature Algorithm, Public Key (al
 # Backup CA certificate from LDAP
 goertipy ca backup --ca 'corp-CA' -u user@corp.local --dc-ip 10.0.0.1
 
-# List all CAs (omit --ca to enumerate all)
-goertipy ca backup -u user@corp.local --dc-ip 10.0.0.1
+# Dump CA configuration (EditFlags, RequestDisposition, CAType, etc.)
+goertipy ca config --ca 'corp-CA' -u admin -d corp.local --dc-ip 10.0.0.1 -H :hash
 
-# With pass-the-hash
-goertipy ca backup --ca 'corp-CA' -u administrator -d corp.local --dc-ip 10.0.0.1 -H :aabbccdd11223344
+# Revoke a certificate by serial number
+goertipy ca revoke --ca 'corp-CA' --serial 0x1234 --reason keyCompromise \
+  -u admin -d corp.local --dc-ip 10.0.0.1 -H :hash
+
+# List templates enabled on the CA
+goertipy ca list-templates --ca 'corp-CA' -u admin -d corp.local --dc-ip 10.0.0.1
+
+# Enable/disable a template
+goertipy ca enable-template --ca 'corp-CA' --template WebServer --template-oid 1.3.6.1... \
+  -u admin -d corp.local --dc-ip 10.0.0.1
+goertipy ca disable-template --ca 'corp-CA' --template WebServer \
+  -u admin -d corp.local --dc-ip 10.0.0.1
 ```
+
+`ca config` retrieves configuration via DCOM (ICertAdminD2), with automatic **RRP fallback** for entries like `EditFlags` and `RequestDisposition` that CSRA can't return. Values are translated to human-readable form (e.g., `Enterprise Root CA`, decoded flag names).
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--ca` | | CA name (optional — lists all if omitted) |
-| `--dc-ip` | | Domain Controller IP |
+| `--ca` | | CA name (required for admin commands) |
+| `--dc-ip` | | CA server IP |
 | `--username` | `-u` | Username |
 | `--password` | `-p` | Password |
 | `--hashes` | `-H` | NTLM hash (LM:NT or :NT) |
 | `--domain` | `-d` | Target domain |
-| `--scheme` | | LDAP scheme: `ldap` or `ldaps` (default: ldaps) |
-| `--output` | `-o` | Output PEM filename |
+| `--serial` | | Certificate serial (for revoke) |
+| `--reason` | | Revocation reason (for revoke) |
+| `--template` | | Template name (for enable/disable) |
+| `--template-oid` | | Template OID (for enable) |
+| `--scheme` | | LDAP scheme (default: ldaps, for backup) |
+| `--output` | `-o` | Output filename |
+| `--debug` | | Debug output |
 
 ---
 
@@ -347,6 +371,20 @@ secretsdump.py -hashes :NT_HASH corp.local/administrator@10.0.0.1
 | RPC/TCP | `--dc-ip` (default) | 135 + dynamic | EPM endpoint resolution, then direct TCP |
 | Named Pipe | `--dc-ip` + `--pipe` | 445 | SMB pipe `\pipe\cert`, no EPM needed |
 | HTTP/HTTPS | `--web URL` | 80/443 | certsrv/certfnsh.asp with NTLM auth |
+| DCOM | `--dc-ip` (ca admin) | 135 + dynamic | DCOM activation for ICertAdminD/D2 |
+| RRP | automatic fallback | 445 | SMB pipe `\pipe\winreg` for registry |
+
+### SOCKS Proxy Support
+
+All commands support routing traffic through a SOCKS5 proxy:
+
+```bash
+# Via environment variable
+export ALL_PROXY=socks5://127.0.0.1:1080
+goertipy find -u user@corp.local --dc-ip 10.0.0.1
+
+# Useful with Chisel, ligolo-ng, or SSH tunnels
+```
 
 ## Vulnerability Detection
 
@@ -371,8 +409,8 @@ goertipy/
 ├── docs/                 # Deep dive documentation with protocol diagrams
 ├── internal/commands/    # Cobra command definitions (find, req, auth, cert, ca, forge, template)
 └── pkg/
-    ├── adcs/             # AD CS enrollment (RPC, HTTP, pipe), enumeration, vuln detection
-    │   └── flags/        # Certificate template and EKU constants
+    ├── adcs/             # AD CS enrollment, enumeration, DCOM admin, RRP fallback
+    │   └── flags/        # Certificate template, EKU, and CA config flag constants
     ├── cert/             # Key generation, CSR creation, PFX handling
     ├── ldap/             # LDAP client, SID resolution
     ├── log/              # Structured logger
@@ -411,6 +449,9 @@ See [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md) for protocol flow diagrams and techni
 - [Microsoft AD CS Documentation](https://learn.microsoft.com/en-us/windows-server/identity/ad-cs/)
 - [MS-ICPR — ICertPassage Remote Protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-icpr/)
 - [MS-WCCE — Certificate Enrollment Web Service](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/)
+- [MS-CSRA — Certificate Services Remote Administration](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-csra/)
+- [MS-DCOM — Distributed Component Object Model](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-dcom/)
+- [MS-RRP — Windows Remote Registry Protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rrp/)
 - [RFC 4556 — PKINIT](https://www.rfc-editor.org/rfc/rfc4556)
 
 ## Acknowledgements

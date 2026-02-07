@@ -40,6 +40,9 @@ type FindFlags struct {
 	// Verbosity
 	Debug   bool
 	Verbose bool
+
+	// Proxy
+	Proxy string
 }
 
 var findFlags FindFlags
@@ -82,6 +85,9 @@ identifies potential vulnerabilities (ESC1-ESC16).`,
 	// Verbosity
 	cmd.Flags().BoolVar(&findFlags.Debug, "debug", false, "Enable debug output")
 	cmd.Flags().BoolVarP(&findFlags.Verbose, "verbose", "v", false, "Enable verbose output")
+
+	// Proxy
+	cmd.Flags().StringVar(&findFlags.Proxy, "proxy", "", "SOCKS5 proxy URL (e.g., socks5://127.0.0.1:1080)")
 
 	return cmd
 }
@@ -146,6 +152,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 		NTHash:             ntHash,
 		Domain:             findFlags.Domain,
 		InsecureSkipVerify: true, // For lab environments
+		ProxyURL:           findFlags.Proxy,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect: %w", err)

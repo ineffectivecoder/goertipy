@@ -66,14 +66,22 @@ func EnrollHTTP(ctx context.Context, opts *EnrollOptions) (*EnrollResult, error)
 	baseURL := strings.TrimRight(opts.WebURL, "/")
 
 	// Create NTLM-authenticated HTTP client
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // Self-signed CA certs are common
+		},
+	}
+	if opts.ProxyURL != "" {
+		proxyURL, err := url.Parse(opts.ProxyURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid proxy URL %q: %w", opts.ProxyURL, err)
+		}
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		Transport: ntlmssp.Negotiator{
-			RoundTripper: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					InsecureSkipVerify: true, // Self-signed CA certs are common
-				},
-			},
+			RoundTripper: transport,
 		},
 	}
 

@@ -4,9 +4,12 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 
 	"github.com/go-ldap/ldap/v3"
+	"golang.org/x/net/proxy"
 )
 
 // Client wraps an LDAP connection with helper methods
@@ -32,6 +35,9 @@ type Options struct {
 
 	// InsecureSkipVerify skips TLS certificate verification
 	InsecureSkipVerify bool
+
+	// ProxyURL is a SOCKS5 proxy URL (e.g., socks5://127.0.0.1:1080)
+	ProxyURL string
 }
 
 // ParseHashes parses a hash string in LM:NT or :NT format into LM and NT components
@@ -71,7 +77,10 @@ func Connect(opts Options) (*Client, error) {
 
 	address := fmt.Sprintf("%s:%d", opts.Server, opts.Port)
 
-	if opts.UseTLS {
+	if opts.ProxyURL != "" {
+		// Proxy mode: dial through SOCKS5 proxy, then wrap with LDAP
+		conn, err = dialLDAPViaProxy(opts)
+	} else if opts.UseTLS {
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: opts.InsecureSkipVerify,
 			ServerName:         opts.Server,
@@ -220,4 +229,83 @@ func (c *Client) ModifyAttribute(dn string, mods []ldap.Change) error {
 // Conn returns the underlying LDAP connection for advanced operations
 func (c *Client) Conn() *ldap.Conn {
 	return c.conn
+}
+
+// dialLDAPViaProxy connects to an LDAP server through a SOCKS5 proxy.
+func dialLDAPViaProxy(opts Options) (*ldap.Conn, error) {
+	proxyURL, err := url.Parse(opts.ProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL %q: %w", opts.ProxyURL, err)
+	}
+
+	dialer, err := proxy.FromURL(proxyURL, proxy.Direct)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create proxy dialer: %w", err)
+	}
+
+	address := fmt.Sprintf("%s:%d", opts.Server, opts.Port)
+
+	// Dial the LDAP server through the SOCKS proxy.
+	rawConn, err := dialer.Dial("tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("proxy dial to %s failed: %w", address, err)
+	}
+
+	if opts.UseTLS {
+		// Wrap the raw connection with TLS.
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: opts.InsecureSkipVerify,
+			ServerName:         opts.Server,
+		}
+		tlsConn := tls.Client(rawConn, tlsConfig)
+		if err := tlsConn.Handshake(); err != nil {
+			rawConn.Close()
+			return nil, fmt.Errorf("TLS handshake via proxy failed: %w", err)
+		}
+		conn := ldap.NewConn(tlsConn, true)
+		conn.Start()
+		return conn, nil
+	}
+
+	conn := ldap.NewConn(rawConn, false)
+	conn.Start()
+	return conn, nil
+}
+
+// ParseProxyURL validates and normalizes a proxy URL string.
+// Returns empty string and nil error if input is empty.
+func ParseProxyURL(proxyStr string) (string, error) {
+	if proxyStr == "" {
+		return "", nil
+	}
+
+	// Add socks5 scheme if missing.
+	if !strings.Contains(proxyStr, "://") {
+		proxyStr = "socks5://" + proxyStr
+	}
+
+	parsed, err := url.Parse(proxyStr)
+	if err != nil {
+		return "", fmt.Errorf("invalid proxy URL: %w", err)
+	}
+
+	switch parsed.Scheme {
+	case "socks5", "socks5h", "socks4", "socks4a":
+		// supported for all transports
+	case "http", "https":
+		// supported for HTTP transport only
+	default:
+		return "", fmt.Errorf("unsupported proxy scheme %q (use socks5, socks4, http, or https)", parsed.Scheme)
+	}
+
+	if parsed.Host == "" {
+		return "", fmt.Errorf("proxy URL missing host")
+	}
+
+	// Ensure port is present
+	if _, _, err := net.SplitHostPort(parsed.Host); err != nil {
+		return "", fmt.Errorf("proxy URL missing port (e.g., socks5://127.0.0.1:1080): %w", err)
+	}
+
+	return parsed.String(), nil
 }

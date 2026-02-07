@@ -432,15 +432,118 @@ secretsdump.py -hashes :ef2abb06bca18700e7a0c02dd5b358aa domain/administrator@DC
 
 ---
 
+## `ca` — CA Administration (DCOM + RRP)
+
+Manages the CA via DCOM (ICertAdminD/D2) for configuration, revocation, and template management. Falls back to Remote Registry Protocol (RRP) for entries CSRA can't return.
+
+### DCOM Activation Flow
+
+```mermaid
+sequenceDiagram
+    participant G as goertipy ca
+    participant OX as OXID Resolver :135
+    participant CA as CA Server (DCOM)
+
+    rect rgb(40, 40, 60)
+    note right of G: Phase 1 — DCOM Activation
+    G->>OX: ServerAlive2 (discover COM version)
+    OX-->>G: COM version 5.7
+    G->>OX: RemoteCreateInstance(CLSID d99e6e73-...)
+    note right of OX: Activate CertAdmin with both<br/>ICertAdminD + ICertAdminD2 IIDs
+    OX-->>G: OXID bindings + per-interface IPIDs
+    G->>CA: DCE/RPC Bind to OXID endpoint
+    end
+
+    rect rgb(40, 60, 40)
+    note right of G: Phase 2 — Config Dump (CSRA)
+    G->>CA: ICertAdminD2::GetConfigEntry("CAType")
+    CA-->>G: VARIANT(VT_I4, 0) → Enterprise Root CA
+    G->>CA: GetConfigEntry("Policy\EditFlags")
+    CA-->>G: ERROR_FILE_NOT_FOUND (entry not in CSRA)
+    end
+```
+
+### RRP Fallback (Remote Registry)
+
+When `GetConfigEntry` returns `ERROR_FILE_NOT_FOUND`, the tool falls back to reading the registry directly via RRP over SMB named pipe.
+
+```mermaid
+sequenceDiagram
+    participant G as goertipy ca config
+    participant SMB as SMB :445
+
+    rect rgb(60, 40, 40)
+    note right of G: RRP Fallback
+    G->>SMB: SMB Connect + NTLM Auth
+    G->>SMB: Open pipe \\pipe\\winreg
+    G->>SMB: DCE/RPC Bind (winreg v1.0)
+    G->>SMB: OpenLocalMachine → HKLM handle
+    G->>SMB: BaseRegOpenKey("SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\CA-Name")
+    SMB-->>G: CA config key handle
+    G->>SMB: BaseRegOpenKey("PolicyModules\...Default.Policy")
+    SMB-->>G: Policy key handle
+    G->>SMB: BaseRegQueryValue("EditFlags") → REG_DWORD
+    SMB-->>G: 0x11014E (decoded flags)
+    G->>SMB: BaseRegQueryValue("RequestDisposition") → REG_DWORD
+    SMB-->>G: 1 (Issue/Auto-approve)
+    end
+```
+
+> [!IMPORTANT]
+> The `RRP_UNICODE_STRING` wire format requires null-terminated strings, but go-msrpc's `UnicodeString` marshal doesn't auto-add the terminator. All subkey and value names must have `\x00` appended to the Buffer field, handled by the `rrpStr()` helper.
+
+### Config Value Translation
+
+Raw numeric values are decoded at display time:
+
+| Entry | Raw | Decoded |
+|-------|-----|---------|
+| `CAType` | `0` | Enterprise Root CA |
+| `Policy\EditFlags` | `0x11014E` | `ENABLECHASECLIENTDC \| ENABLEDEFAULTSMIME \| ENABLEAKIKEYID \| ...` |
+| `Policy\RequestDisposition` | `1` | Issue (Auto-approve) |
+
+### Template Management (DCOM)
+
+```mermaid
+sequenceDiagram
+    participant G as goertipy ca
+    participant CA as CA (DCOM)
+
+    G->>CA: ICertAdminD2::GetCAProperty(CR_PROP_TEMPLATES)
+    CA-->>G: UTF-16LE blob (name\nOID\n pairs)
+
+    alt enable-template
+        G->>G: Prepend new template bytes to raw blob
+        G->>CA: SetCAProperty(CR_PROP_TEMPLATES, modified blob)
+    else disable-template
+        G->>G: Find + splice out template bytes from raw blob
+        G->>CA: SetCAProperty(CR_PROP_TEMPLATES, modified blob)
+    end
+```
+
+### Certificate Revocation
+
+```bash
+goertipy ca revoke --ca 'corp-CA' --serial 0x1234 --reason keyCompromise \
+  -u admin -d corp.local --dc-ip 10.0.0.1
+```
+
+Uses `ICertAdminD::RevokeCertificate` with the serial number and CRL reason code. Valid reasons: `unspecified`, `keyCompromise`, `caCompromise`, `affiliationChanged`, `superseded`, `cessationOfOperation`.
+
+---
+
 ## Protocols and Standards
 
 | Protocol | Spec | Used By |
 |----------|------|---------|
 | MS-ICPR (ICertPassage) | MS-ICPR | `req` (RPC + pipe) |
 | MS-WCCE (Certificate Enrollment) | MS-WCCE | `req` (HTTP) |
+| MS-CSRA (ICertAdminD/D2) | MS-CSRA | `ca config`, `ca revoke`, `ca list/enable/disable-template` |
+| MS-RRP (Remote Registry) | MS-RRP | `ca config` (fallback for registry entries) |
+| DCOM (IRemoteSCMActivator) | MS-DCOM | `ca` admin commands (object activation) |
 | LDAP/LDAPS | RFC 4511 | `find`, `ca backup`, `template` |
 | Kerberos PKINIT | RFC 4556 | `auth` |
 | PKCS#10 (CSR) | RFC 2986 | `req` |
 | PKCS#12 (PFX) | RFC 7292 | `cert show`, `forge`, `auth` |
-| DCE/RPC | MS-RPCE | `req` (all transports) |
-| SMB | MS-SMB2 | `req` (pipe transport) |
+| DCE/RPC | MS-RPCE | `req`, `ca` (all transports) |
+| SMB | MS-SMB2 | `req` (pipe), `ca` (RRP fallback) |

@@ -29,7 +29,6 @@ require (
 	github.com/rs/zerolog v1.32.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 )
@@ -38,6 +37,9 @@ require (
 	github.com/ineffectivecoder/gopkinit v0.0.0
 	github.com/jcmturner/gofork v1.7.6
 	github.com/jcmturner/gokrb5/v8 v8.4.4
+	golang.org/x/net v0.47.0
 )
 
 replace github.com/ineffectivecoder/gopkinit => /home/slacker/gopkinit
+
+replace github.com/oiweiwei/go-msrpc => /home/slacker/go-msrpc

@@ -18,7 +18,9 @@ func main() {
 
 A Go implementation for enumerating and exploiting AD CS misconfigurations.
 Similar to Certipy, but written in Go for portability and performance.`,
-		Version: version,
+		Version:       version,
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
 
 	// Add subcommands
