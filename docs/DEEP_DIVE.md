@@ -272,6 +272,89 @@ sequenceDiagram
 
 ---
 
+## `template` — ESC4 Template Modification
+
+Exploits dangerous ACL permissions on certificate templates. If a low-privilege user has `WriteProperty`, `WriteDACL`, or `GenericAll` on a template object, the template attributes can be rewritten to make it ESC1-exploitable.
+
+### Attack Flow
+
+```mermaid
+sequenceDiagram
+    participant G as goertipy template
+    participant DC as Domain Controller (LDAP)
+    participant FS as Filesystem
+
+    rect rgb(40, 40, 60)
+    note right of G: Phase 1 - Backup
+    G->>DC: LDAP Bind (NTLM/password)
+    G->>DC: Search template by CN
+    DC-->>G: Template attributes (flags, EKUs, RA signature)
+    G->>FS: Save original config → {template}_backup.json
+    end
+
+    rect rgb(60, 40, 40)
+    note right of G: Phase 2 - Modify
+    G->>DC: LDAP Modify (4 attribute changes)
+    note right of DC: Certificate-Name-Flag |= ENROLLEE_SUPPLIES_SUBJECT
+    note right of DC: Enrollment-Flag &= ~PEND_ALL_REQUESTS
+    note right of DC: RA-Signature = 0
+    note right of DC: EKU = Client Authentication
+    DC-->>G: Success
+    end
+
+    note over G: Template is now ESC1-exploitable
+
+    rect rgb(40, 60, 60)
+    note right of G: Phase 3 - Exploit (separate command)
+    G->>DC: Request cert with UPN SAN (goertipy req)
+    DC-->>G: Signed certificate
+    end
+
+    rect rgb(40, 60, 40)
+    note right of G: Phase 4 - Restore
+    G->>FS: Load backup JSON
+    G->>DC: LDAP Modify (restore 4 original attributes)
+    DC-->>G: Success
+    end
+```
+
+### Attributes Modified
+
+| Attribute | Original → Modified | Purpose |
+|-----------|---------------------|---------|
+| `msPKI-Certificate-Name-Flag` | flags \| `0x1` | Enable `ENROLLEE_SUPPLIES_SUBJECT` — allows specifying any UPN/SAN |
+| `msPKI-Enrollment-Flag` | flags & ~`0x2` | Clear `PEND_ALL_REQUESTS` — bypass manager approval |
+| `msPKI-RA-Signature` | N → `0` | Remove authorized signature requirement |
+| `pKIExtendedKeyUsage` | any → `1.3.6.1.5.5.7.3.2` | Set to Client Authentication for PKINIT |
+
+### Backup Format
+
+The backup JSON preserves exactly the values needed to restore:
+
+```json
+{
+  "template_name": "Workstation",
+  "dn": "CN=Workstation,CN=Certificate Templates,...",
+  "timestamp": "2026-02-07T18:48:00Z",
+  "msPKI-Certificate-Name-Flag": "134217728",
+  "msPKI-Enrollment-Flag": "32",
+  "msPKI-RA-Signature": "0",
+  "pKIExtendedKeyUsage": ["1.3.6.1.5.5.7.3.2"]
+}
+```
+
+### Why Templates Can Be Modified via LDAP
+
+Certificate templates are AD objects stored under:
+
+```
+CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,DC=...
+```
+
+Their attributes (`msPKI-Certificate-Name-Flag`, `pKIExtendedKeyUsage`, etc.) are standard AD attributes writable via LDAP `Modify` operations. The ESC4 vulnerability exists when low-privilege principals are granted `WriteProperty`, `WriteDACL`, or `GenericAll` ACEs on these objects.
+
+---
+
 ## `forge` — Golden Certificate Forgery
 
 Signs a certificate as any user using a stolen CA private key.
@@ -355,7 +438,7 @@ secretsdump.py -hashes :ef2abb06bca18700e7a0c02dd5b358aa domain/administrator@DC
 |----------|------|---------|
 | MS-ICPR (ICertPassage) | MS-ICPR | `req` (RPC + pipe) |
 | MS-WCCE (Certificate Enrollment) | MS-WCCE | `req` (HTTP) |
-| LDAP/LDAPS | RFC 4511 | `find`, `ca backup` |
+| LDAP/LDAPS | RFC 4511 | `find`, `ca backup`, `template` |
 | Kerberos PKINIT | RFC 4556 | `auth` |
 | PKCS#10 (CSR) | RFC 2986 | `req` |
 | PKCS#12 (PFX) | RFC 7292 | `cert show`, `forge`, `auth` |
