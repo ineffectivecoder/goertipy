@@ -532,6 +532,62 @@ Uses `ICertAdminD::RevokeCertificate` with the serial number and CRL reason code
 
 ---
 
+## Report Generation
+
+Generates professional pentest reports from `find` results with embedded ESC knowledge, attack commands, and remediation guidance.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    Find["find result"] --> Collect["Collect findings"]
+    Collect --> Sort["Sort by severity"]
+    Sort --> KB["ESC Knowledge Base lookup"]
+    KB --> Render["Render report"]
+    
+    subgraph "Output Formats"
+        Render --> MD["Markdown (.md)"]
+        Render --> HTML["HTML (dark theme, self-contained)"]
+        HTML --> PDF["PDF (via wkhtmltopdf / Chrome headless)"]
+    end
+```
+
+### Report Sections
+
+| Section | Content |
+|---------|---------|
+| Executive Summary | Domain, CA count, template count, severity breakdown table |
+| Risk Summary | All findings sorted by severity with exploitability status |
+| Detailed Findings | Per-vuln: description, exact `goertipy` attack commands, remediation |
+| CA Configuration Audit | Cert validity, flags, ManageCA/ManageCertificates rights |
+| Appendix | Full template listing with EKUs, schema version, flags |
+
+### ESC Knowledge Base
+
+Embedded in `pkg/output/report.go` — each ESC entry contains:
+
+| Field | Description |
+|-------|-------------|
+| `Severity` | Critical / High / Medium / Low |
+| `Title` | Human-readable vulnerability name |
+| `Description` | Full technical explanation of the vulnerability |
+| `Attack` | `goertipy` command template with `%CA%`, `%TEMPLATE%`, `%DOMAIN%`, `%DC%` placeholders |
+| `Remediation` | Step-by-step fix instructions |
+
+Covered ESCs: ESC1, ESC2, ESC3, ESC4, ESC6, ESC7, ESC8, ESC9, ESC13, ESC15
+
+### PDF Generation
+
+PDF output uses external tools — no Go dependencies added:
+
+1. **wkhtmltopdf** (preferred) — generates A4 PDF with margins from HTML
+2. **Chrome/Chromium headless** (fallback) — `--headless --print-to-pdf`
+3. If neither is available, returns an error with install instructions
+
+The HTML is rendered to a temp file, converted, then cleaned up.
+
+---
+
 ## Protocols and Standards
 
 | Protocol | Spec | Used By |

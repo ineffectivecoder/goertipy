@@ -16,6 +16,7 @@ An Active Directory Certificate Services (AD CS) enumeration and exploitation to
 - **Remote Registry Fallback** — Retrieve CA policy flags (EditFlags, RequestDisposition) via RRP when DCOM fails
 - **Template Management** — Enable/disable templates on the CA, ESC4 exploitation (modify → ESC1 → restore)
 - **Golden Certificate Forgery** — Forge certs as any user using a stolen CA private key
+- **Report Generation** — Professional pentest reports in Markdown, HTML (dark theme), and PDF with attack commands and remediation
 - **Security Descriptor Parsing** — Full Windows ACL/ACE/SID parsing with permission analysis
 - **Pass-the-Hash** — NTLM hash authentication on all commands via `--hashes LM:NT`
 - **SOCKS Proxy Support** — Route all traffic through SOCKS5 proxies (e.g., Chisel, proxychains)
@@ -74,6 +75,18 @@ goertipy find -u user@corp.local --dc-ip 10.0.0.1 --ca-name 'corp-CA'
 
 # JSON output
 goertipy find -u user@corp.local --dc-ip 10.0.0.1 --json
+
+# Generate Markdown pentest report
+goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report
+
+# Generate self-contained HTML report (dark theme)
+goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report-html
+
+# Generate PDF report (requires wkhtmltopdf or Chrome)
+goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report-pdf
+
+# Generate all formats at once
+goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report --report-html --report-pdf
 ```
 
 | Flag | Short | Description |
@@ -414,7 +427,7 @@ goertipy/
     ├── cert/             # Key generation, CSR creation, PFX handling
     ├── ldap/             # LDAP client, SID resolution
     ├── log/              # Structured logger
-    ├── output/           # Text (colored) and JSON formatters
+    ├── output/           # Text (colored), JSON, and report formatters
     └── security/         # Windows security descriptor parsing
 ```
 
