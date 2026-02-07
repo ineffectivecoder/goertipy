@@ -145,6 +145,47 @@ goertipy auth -u admin@corp.local --dc-ip 10.0.0.1 --pfx-base64 "MIIJ..."
 
 ---
 
+### Cert (Certificate Utilities)
+
+```bash
+# Inspect a PFX certificate
+goertipy cert show certificate.pfx
+
+# With password-protected PFX
+goertipy cert show encrypted.pfx --pfx-pass mypassword
+
+# Inspect a PEM certificate
+goertipy cert show ca-cert.pem
+```
+
+---
+
+### CA (Certificate Authority Management)
+
+```bash
+# Backup CA certificate from LDAP
+goertipy ca backup --ca 'corp-CA' -u user@corp.local --dc-ip 10.0.0.1
+
+# List all CAs (omit --ca to enumerate all)
+goertipy ca backup -u user@corp.local --dc-ip 10.0.0.1
+
+# With pass-the-hash
+goertipy ca backup --ca 'corp-CA' -u administrator -d corp.local --dc-ip 10.0.0.1 -H :aabbccdd11223344
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--ca` | | CA name (optional — lists all if omitted) |
+| `--dc-ip` | | Domain Controller IP |
+| `--username` | `-u` | Username |
+| `--password` | `-p` | Password |
+| `--hashes` | `-H` | NTLM hash (LM:NT or :NT) |
+| `--domain` | `-d` | Target domain |
+| `--scheme` | | LDAP scheme: `ldap` or `ldaps` (default: ldaps) |
+| `--output` | `-o` | Output PEM filename |
+
+---
+
 ### ESC1 Full Chain Example
 
 ```bash
