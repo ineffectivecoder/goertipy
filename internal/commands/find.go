@@ -35,6 +35,7 @@ type FindFlags struct {
 	VulnerableOnly bool
 	EnabledOnly    bool
 	HideAdmins     bool
+	CAName         string
 
 	// Verbosity
 	Debug   bool
@@ -76,6 +77,7 @@ identifies potential vulnerabilities (ESC1-ESC16).`,
 	cmd.Flags().BoolVar(&findFlags.VulnerableOnly, "vulnerable", false, "Only show vulnerable templates")
 	cmd.Flags().BoolVar(&findFlags.EnabledOnly, "enabled", false, "Only show enabled templates")
 	cmd.Flags().BoolVar(&findFlags.HideAdmins, "hide-admins", false, "Hide default admin permissions")
+	cmd.Flags().StringVar(&findFlags.CAName, "ca-name", "", "Filter templates by publishing CA name")
 
 	// Verbosity
 	cmd.Flags().BoolVar(&findFlags.Debug, "debug", false, "Enable debug output")
@@ -161,6 +163,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 		VulnerableOnly: findFlags.VulnerableOnly,
 		EnabledOnly:    findFlags.EnabledOnly,
 		HideAdmins:     findFlags.HideAdmins,
+		CAName:         findFlags.CAName,
 	})
 	if err != nil {
 		return fmt.Errorf("enumeration failed: %w", err)

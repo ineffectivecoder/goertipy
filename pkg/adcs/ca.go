@@ -38,12 +38,15 @@ type CertificateAuthority struct {
 	CAFlags uint32
 
 	// ESC7: CA security descriptor and parsed permissions
-	SecurityDescriptor []byte
-	Permissions        *security.TemplatePermissions
+	SecurityDescriptor           []byte
+	Permissions                  *security.TemplatePermissions
+	ManageCAPrincipals           []string
+	ManageCertificatesPrincipals []string
 
 	// ESC8: HTTP enrollment servers
-	EnrollmentServers []string
-	HasWebEnrollment  bool
+	EnrollmentServers   []string
+	EnrollmentEndpoints []string // Parsed URLs from msPKI-Enrollment-Servers
+	HasWebEnrollment    bool
 
 	// Vulnerabilities detected
 	Vulnerabilities []string
@@ -118,6 +121,9 @@ func EnumerateCAs(client *goertipyldap.Client) ([]*CertificateAuthority, error) 
 		// Check for web enrollment (ESC8)
 		ca.HasWebEnrollment = len(ca.EnrollmentServers) > 0
 
+		// Parse enrollment endpoint URLs from msPKI-Enrollment-Servers
+		ca.EnrollmentEndpoints = parseEnrollmentEndpoints(ca.EnrollmentServers)
+
 		// Analyze CA-level vulnerabilities
 		ca.analyzeCAVulnerabilities()
 
@@ -125,6 +131,22 @@ func EnumerateCAs(client *goertipyldap.Client) ([]*CertificateAuthority, error) 
 	}
 
 	return cas, nil
+}
+
+// parseEnrollmentEndpoints extracts URLs from msPKI-Enrollment-Servers values
+// Format: "priority\nauth_type\nURL\nrenewal_only"
+func parseEnrollmentEndpoints(servers []string) []string {
+	var urls []string
+	for _, server := range servers {
+		parts := strings.Split(server, "\n")
+		if len(parts) >= 3 {
+			url := strings.TrimSpace(parts[2])
+			if url != "" {
+				urls = append(urls, url)
+			}
+		}
+	}
+	return urls
 }
 
 // analyzeCAVulnerabilities checks the CA for ESC6 and ESC8 vulnerabilities
@@ -154,6 +176,9 @@ func (ca *CertificateAuthority) AnalyzeCAPermissions(sidResolver func(string) st
 	}
 	ca.Permissions = perms
 
+	// Parse CA-specific rights (ManageCA / ManageCertificates)
+	ca.parseCASpecificRights(sidResolver)
+
 	// ESC7: Low-privilege users have ManageCA or ManageCertificates rights
 	// This is detected via WriteDACL / WriteOwner / FullControl on the CA object
 	// which grants effective ManageCA rights
@@ -169,6 +194,50 @@ func (ca *CertificateAuthority) AnalyzeCAPermissions(sidResolver func(string) st
 			ca.Vulnerabilities = append(ca.Vulnerabilities, "ESC7")
 		}
 	}
+}
+
+// parseCASpecificRights extracts ManageCA and ManageCertificates from the DACL
+func (ca *CertificateAuthority) parseCASpecificRights(sidResolver func(string) string) {
+	sd, err := security.ParseSecurityDescriptor(ca.SecurityDescriptor)
+	if err != nil || sd.DACL == nil {
+		return
+	}
+
+	for _, ace := range sd.DACL.Entries {
+		if ace.Type != security.ACCESS_ALLOWED_ACE_TYPE && ace.Type != security.ACCESS_ALLOWED_OBJECT_ACE_TYPE {
+			continue
+		}
+		if ace.SID == nil {
+			continue
+		}
+
+		sidStr := ace.SID.String()
+		principal := sidStr
+		if sidResolver != nil {
+			principal = sidResolver(sidStr)
+		}
+
+		mask := ace.AccessMask
+
+		// CA_RIGHT_MANAGE_CA = 0x01
+		if mask&flags.CA_RIGHT_MANAGE_CA != 0 || mask&security.ADS_RIGHT_GENERIC_ALL != 0 {
+			ca.ManageCAPrincipals = appendUniqueCA(ca.ManageCAPrincipals, principal)
+		}
+
+		// CA_RIGHT_MANAGE_CERTIFICATES = 0x02
+		if mask&flags.CA_RIGHT_MANAGE_CERTIFICATES != 0 || mask&security.ADS_RIGHT_GENERIC_ALL != 0 {
+			ca.ManageCertificatesPrincipals = appendUniqueCA(ca.ManageCertificatesPrincipals, principal)
+		}
+	}
+}
+
+func appendUniqueCA(slice []string, item string) []string {
+	for _, s := range slice {
+		if s == item {
+			return slice
+		}
+	}
+	return append(slice, item)
 }
 
 // HasTemplate checks if the CA publishes a specific template

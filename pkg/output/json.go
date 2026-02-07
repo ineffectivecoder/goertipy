@@ -3,6 +3,7 @@ package output
 import (
 	"encoding/json"
 	"io"
+	"strings"
 
 	"github.com/slacker/goertipy/pkg/adcs"
 )
@@ -36,25 +37,35 @@ type JSONCertificateAuthority struct {
 	NotBefore            string   `json:"not_before,omitempty"`
 	NotAfter             string   `json:"not_after,omitempty"`
 	WebEnrollment        bool     `json:"web_enrollment"`
+	EnrollmentEndpoints  []string `json:"enrollment_endpoints,omitempty"`
+	ManageCA             []string `json:"manage_ca,omitempty"`
+	ManageCertificates   []string `json:"manage_certificates,omitempty"`
 	CertificateTemplates []string `json:"certificate_templates"`
 	Vulnerabilities      []string `json:"vulnerabilities,omitempty"`
 }
 
 // JSONCertificateTemplate is the JSON structure for a template
 type JSONCertificateTemplate struct {
-	Name                    string           `json:"name"`
-	DisplayName             string           `json:"display_name"`
-	SchemaVersion           int              `json:"schema_version"`
-	Enabled                 bool             `json:"enabled"`
-	ValidityPeriod          string           `json:"validity_period,omitempty"`
-	ExtendedKeyUsage        []string         `json:"extended_key_usage"`
-	IssuancePolicies        []string         `json:"issuance_policies,omitempty"`
-	EnrolleeSuppliesSubject bool             `json:"enrollee_supplies_subject"`
-	RequiresManagerApproval bool             `json:"requires_manager_approval"`
-	AuthorizedSignatures    int              `json:"authorized_signatures"`
-	NoSecurityExtension     bool             `json:"no_security_extension"`
-	Permissions             *JSONPermissions `json:"permissions,omitempty"`
-	Vulnerabilities         []string         `json:"vulnerabilities,omitempty"`
+	Name                           string           `json:"name"`
+	DisplayName                    string           `json:"display_name"`
+	SchemaVersion                  int              `json:"schema_version"`
+	Enabled                        bool             `json:"enabled"`
+	PublishedBy                    []string         `json:"published_by,omitempty"`
+	ValidityPeriod                 string           `json:"validity_period,omitempty"`
+	ExtendedKeyUsage               []string         `json:"extended_key_usage"`
+	HasClientAuthEKU               bool             `json:"has_client_auth_eku"`
+	IssuancePolicies               []string         `json:"issuance_policies,omitempty"`
+	EnrolleeSuppliesSubject        bool             `json:"enrollee_supplies_subject"`
+	EnrolleeSuppliesSubjectAltName bool             `json:"enrollee_supplies_subject_alt_name"`
+	RequiresManagerApproval        bool             `json:"requires_manager_approval"`
+	AuthorizedSignatures           int              `json:"authorized_signatures"`
+	NoSecurityExtension            bool             `json:"no_security_extension"`
+	PrivateKeyExportable           bool             `json:"private_key_exportable"`
+	EnrollmentFlagNames            []string         `json:"enrollment_flags,omitempty"`
+	NameFlagNames                  []string         `json:"name_flags,omitempty"`
+	Exploitability                 string           `json:"exploitability,omitempty"`
+	Permissions                    *JSONPermissions `json:"permissions,omitempty"`
+	Vulnerabilities                []string         `json:"vulnerabilities,omitempty"`
 }
 
 // JSONPermissions is the JSON structure for template permissions
@@ -70,9 +81,12 @@ type JSONPermissions struct {
 
 // JSONSummary is the JSON structure for summary
 type JSONSummary struct {
-	TotalCAs            int `json:"total_cas"`
-	TotalTemplates      int `json:"total_templates"`
-	VulnerableTemplates int `json:"vulnerable_templates"`
+	TotalCAs             int      `json:"total_cas"`
+	TotalTemplates       int      `json:"total_templates"`
+	VulnerableTemplates  int      `json:"vulnerable_templates"`
+	ExploitableTemplates int      `json:"exploitable_templates"`
+	ConditionalTemplates int      `json:"conditional_templates"`
+	ExploitableESCs      []string `json:"exploitable_escs,omitempty"`
 }
 
 // Format outputs the find results as JSON
@@ -80,9 +94,12 @@ func (f *JSONFormatter) Format(result *adcs.FindResult) error {
 	output := JSONOutput{
 		Domain: result.Domain,
 		Summary: JSONSummary{
-			TotalCAs:            result.TotalCAs,
-			TotalTemplates:      result.TotalTemplates,
-			VulnerableTemplates: result.VulnerableTemplates,
+			TotalCAs:             result.TotalCAs,
+			TotalTemplates:       result.TotalTemplates,
+			VulnerableTemplates:  result.VulnerableTemplates,
+			ExploitableTemplates: result.ExploitableTemplates,
+			ConditionalTemplates: result.ConditionalTemplates,
+			ExploitableESCs:      result.ExploitableESCs,
 		},
 	}
 
@@ -95,6 +112,9 @@ func (f *JSONFormatter) Format(result *adcs.FindResult) error {
 			Subject:              ca.Subject,
 			SerialNumber:         ca.SerialNumber,
 			WebEnrollment:        ca.HasWebEnrollment,
+			EnrollmentEndpoints:  ca.EnrollmentEndpoints,
+			ManageCA:             ca.ManageCAPrincipals,
+			ManageCertificates:   ca.ManageCertificatesPrincipals,
 			CertificateTemplates: ca.CertificateTemplates,
 			Vulnerabilities:      ca.Vulnerabilities,
 		}
@@ -110,19 +130,42 @@ func (f *JSONFormatter) Format(result *adcs.FindResult) error {
 	// Convert templates
 	for _, tmpl := range result.Templates {
 		jsonTmpl := &JSONCertificateTemplate{
-			Name:                    tmpl.Name,
-			DisplayName:             tmpl.DisplayName,
-			SchemaVersion:           tmpl.SchemaVersion,
-			Enabled:                 tmpl.Enabled,
-			ValidityPeriod:          tmpl.ValidityPeriod,
-			ExtendedKeyUsage:        tmpl.ExtendedKeyUsage,
-			IssuancePolicies:        tmpl.IssuancePolicies,
-			EnrolleeSuppliesSubject: tmpl.EnrolleeSuppliesSubject,
-			RequiresManagerApproval: tmpl.RequiresManagerApproval,
-			AuthorizedSignatures:    tmpl.RASignature,
-			NoSecurityExtension:     tmpl.NoSecurityExtension,
-			Vulnerabilities:         tmpl.Vulnerabilities,
+			Name:                           tmpl.Name,
+			DisplayName:                    tmpl.DisplayName,
+			SchemaVersion:                  tmpl.SchemaVersion,
+			Enabled:                        tmpl.Enabled,
+			PublishedBy:                    tmpl.PublishedBy,
+			ValidityPeriod:                 tmpl.ValidityPeriod,
+			ExtendedKeyUsage:               tmpl.ExtendedKeyUsage,
+			HasClientAuthEKU:               tmpl.HasClientAuthEKU,
+			IssuancePolicies:               tmpl.IssuancePolicies,
+			EnrolleeSuppliesSubject:        tmpl.EnrolleeSuppliesSubject,
+			EnrolleeSuppliesSubjectAltName: tmpl.EnrolleeSuppliesSubjectAltName,
+			RequiresManagerApproval:        tmpl.RequiresManagerApproval,
+			AuthorizedSignatures:           tmpl.RASignature,
+			NoSecurityExtension:            tmpl.NoSecurityExtension,
+			PrivateKeyExportable:           tmpl.PrivateKeyExportable,
+			EnrollmentFlagNames:            tmpl.EnrollmentFlagNames,
+			NameFlagNames:                  tmpl.NameFlagNames,
+			Exploitability:                 tmpl.Exploitability,
+			Vulnerabilities:                tmpl.Vulnerabilities,
 		}
+
+		// EKU names for human readability
+		if len(tmpl.ExtendedKeyUsage) == 0 {
+			jsonTmpl.ExtendedKeyUsage = []string{}
+		}
+
+		// Clean up empty slices for nice JSON
+		if len(jsonTmpl.EnrollmentFlagNames) == 0 {
+			jsonTmpl.EnrollmentFlagNames = nil
+		}
+		if len(jsonTmpl.NameFlagNames) == 0 {
+			jsonTmpl.NameFlagNames = nil
+		}
+
+		// Strip empty exploitability
+		jsonTmpl.Exploitability = strings.TrimSpace(jsonTmpl.Exploitability)
 
 		// Include permissions if available
 		if tmpl.Permissions != nil {

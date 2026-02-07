@@ -3,6 +3,7 @@ package adcs
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/go-ldap/ldap/v3"
@@ -43,11 +44,22 @@ type CertificateTemplate struct {
 	Permissions *security.TemplatePermissions
 
 	// Computed properties
-	EnrolleeSuppliesSubject bool
-	RequiresManagerApproval bool
-	HasAuthenticationEKU    bool
-	NoSecurityExtension     bool
-	Enabled                 bool // True if published by at least one CA
+	EnrolleeSuppliesSubject        bool
+	EnrolleeSuppliesSubjectAltName bool
+	RequiresManagerApproval        bool
+	HasAuthenticationEKU           bool
+	HasClientAuthEKU               bool // Explicitly has Client Auth EKU
+	NoSecurityExtension            bool
+	PrivateKeyExportable           bool
+	Enabled                        bool     // True if published by at least one CA
+	PublishedBy                    []string // CA names that publish this template
+
+	// Human-readable flag names
+	EnrollmentFlagNames []string
+	NameFlagNames       []string
+
+	// Exploitability assessment
+	Exploitability string // "Exploitable", "Conditional", "Requires Privileges"
 
 	// Vulnerabilities detected
 	Vulnerabilities []string
@@ -148,13 +160,37 @@ func parseTemplateEntry(entry *ldap.Entry) *CertificateTemplate {
 
 	// Compute boolean flags
 	tmpl.EnrolleeSuppliesSubject = flags.HasFlag(tmpl.CertificateNameFlag, flags.CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT)
+	tmpl.EnrolleeSuppliesSubjectAltName = flags.HasFlag(tmpl.CertificateNameFlag, flags.CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT_ALT_NAME)
 	tmpl.RequiresManagerApproval = flags.HasFlag(tmpl.EnrollmentFlag, flags.CT_FLAG_PEND_ALL_REQUESTS)
 	tmpl.NoSecurityExtension = flags.HasFlag(tmpl.CertificateNameFlag, flags.CT_FLAG_NO_SECURITY_EXTENSION)
+	tmpl.PrivateKeyExportable = flags.HasFlag(tmpl.PrivateKeyFlag, flags.CT_FLAG_EXPORTABLE_KEY)
 
 	// Check for authentication EKU
 	tmpl.HasAuthenticationEKU = tmpl.hasAuthEKU()
+	tmpl.HasClientAuthEKU = tmpl.hasExplicitClientAuth()
+
+	// Parse human-readable flag names
+	tmpl.EnrollmentFlagNames = flags.GetSetFlags(tmpl.EnrollmentFlag, flags.EnrollmentFlagNames)
+	sort.Strings(tmpl.EnrollmentFlagNames)
+	tmpl.NameFlagNames = flags.GetSetFlags(tmpl.CertificateNameFlag, flags.NameFlagNames)
+	sort.Strings(tmpl.NameFlagNames)
 
 	return tmpl
+}
+
+// hasExplicitClientAuth checks for explicit Client Authentication EKU
+func (t *CertificateTemplate) hasExplicitClientAuth() bool {
+	for _, eku := range t.ExtendedKeyUsage {
+		if eku == flags.EKU_CLIENT_AUTH {
+			return true
+		}
+	}
+	for _, policy := range t.ApplicationPolicies {
+		if policy == flags.EKU_CLIENT_AUTH {
+			return true
+		}
+	}
+	return false
 }
 
 // hasAuthEKU checks if the template has an authentication-capable EKU

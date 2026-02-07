@@ -105,6 +105,16 @@ const (
 	CT_FLAG_SKIP_AUTO_RENEWAL uint32 = 0x00040000
 )
 
+// msPKI-Private-Key-Flag constants
+// Reference: [MS-CRTD] 2.27
+const (
+	// CT_FLAG_EXPORTABLE_KEY - Private key can be exported
+	CT_FLAG_EXPORTABLE_KEY uint32 = 0x00000010
+
+	// CT_FLAG_STRONG_KEY_PROTECTION_REQUIRED - Strong key protection required
+	CT_FLAG_STRONG_KEY_PROTECTION_REQUIRED uint32 = 0x00000020
+)
+
 // Extended Key Usage OIDs
 const (
 	// Authentication EKUs
@@ -170,4 +180,44 @@ func IsAuthenticationEKU(oid string) bool {
 // HasFlag checks if a flag is set in a bitmask
 func HasFlag(value, flag uint32) bool {
 	return value&flag != 0
+}
+
+// EnrollmentFlagNames maps enrollment flags to human-readable names
+var EnrollmentFlagNames = map[uint32]string{
+	CT_FLAG_INCLUDE_SYMMETRIC_ALGORITHMS:           "INCLUDE_SYMMETRIC_ALGORITHMS",
+	CT_FLAG_PEND_ALL_REQUESTS:                      "PEND_ALL_REQUESTS",
+	CT_FLAG_PUBLISH_TO_KRA_CONTAINER:               "PUBLISH_TO_KRA_CONTAINER",
+	CT_FLAG_PUBLISH_TO_DS:                          "PUBLISH_TO_DS",
+	CT_FLAG_AUTO_ENROLLMENT:                        "AUTO_ENROLLMENT",
+	CT_FLAG_USER_INTERACTION_REQUIRED:              "USER_INTERACTION_REQUIRED",
+	CT_FLAG_ALLOW_ENROLL_ON_BEHALF_OF:              "ALLOW_ENROLL_ON_BEHALF_OF",
+	CT_FLAG_ADD_OCSP_NOCHECK:                       "ADD_OCSP_NOCHECK",
+	CT_FLAG_NOREVOCATIONINFOINISSUEDCERTS:          "NO_REVOCATION_INFO_IN_ISSUED_CERTS",
+	CT_FLAG_INCLUDE_BASIC_CONSTRAINTS_FOR_EE_CERTS: "INCLUDE_BASIC_CONSTRAINTS_FOR_EE_CERTS",
+	CT_FLAG_ISSUANCE_POLICIES_FROM_REQUEST:         "ISSUANCE_POLICIES_FROM_REQUEST",
+}
+
+// NameFlagNames maps certificate name flags to human-readable names
+var NameFlagNames = map[uint32]string{
+	CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT:          "ENROLLEE_SUPPLIES_SUBJECT",
+	CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT_ALT_NAME: "ENROLLEE_SUPPLIES_SUBJECT_ALT_NAME",
+	CT_FLAG_SUBJECT_ALT_REQUIRE_UPN:            "SUBJECT_ALT_REQUIRE_UPN",
+	CT_FLAG_SUBJECT_ALT_REQUIRE_EMAIL:          "SUBJECT_ALT_REQUIRE_EMAIL",
+	CT_FLAG_SUBJECT_ALT_REQUIRE_DNS:            "SUBJECT_ALT_REQUIRE_DNS",
+	CT_FLAG_SUBJECT_REQUIRE_DNS_AS_CN:          "SUBJECT_REQUIRE_DNS_AS_CN",
+	CT_FLAG_SUBJECT_REQUIRE_EMAIL:              "SUBJECT_REQUIRE_EMAIL",
+	CT_FLAG_SUBJECT_REQUIRE_COMMON_NAME:        "SUBJECT_REQUIRE_COMMON_NAME",
+	CT_FLAG_SUBJECT_REQUIRE_DIRECTORY_PATH:     "SUBJECT_REQUIRE_DIRECTORY_PATH",
+	CT_FLAG_NO_SECURITY_EXTENSION:              "NO_SECURITY_EXTENSION",
+}
+
+// GetSetFlags returns human-readable names for set flags in a bitmask
+func GetSetFlags(value uint32, flagNames map[uint32]string) []string {
+	var names []string
+	for flag, name := range flagNames {
+		if HasFlag(value, flag) {
+			names = append(names, name)
+		}
+	}
+	return names
 }

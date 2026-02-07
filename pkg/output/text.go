@@ -10,12 +10,14 @@ import (
 
 // ANSI color codes
 const (
-	colorReset  = "\033[0m"
-	colorRed    = "\033[91m"
-	colorGreen  = "\033[92m"
-	colorYellow = "\033[93m"
-	colorCyan   = "\033[96m"
-	colorBold   = "\033[1m"
+	colorReset   = "\033[0m"
+	colorRed     = "\033[91m"
+	colorGreen   = "\033[92m"
+	colorYellow  = "\033[93m"
+	colorCyan    = "\033[96m"
+	colorBold    = "\033[1m"
+	colorDim     = "\033[2m"
+	colorMagenta = "\033[95m"
 )
 
 // TextFormatter outputs results in human-readable text format
@@ -70,6 +72,28 @@ func (f *TextFormatter) Format(result *adcs.FindResult) error {
 			f.printf("    %s Web Enrollment: Enabled\n", f.yellow("[*]"))
 		}
 
+		// Enrollment endpoints
+		if len(ca.EnrollmentEndpoints) > 0 {
+			f.println("    Enrollment Endpoints:")
+			for _, ep := range ca.EnrollmentEndpoints {
+				f.printf("      - %s\n", f.yellow(ep))
+			}
+		}
+
+		// CA Permissions (ManageCA / ManageCertificates)
+		if len(ca.ManageCAPrincipals) > 0 {
+			f.println("    ManageCA:")
+			for _, p := range ca.ManageCAPrincipals {
+				f.printf("      - %s\n", p)
+			}
+		}
+		if len(ca.ManageCertificatesPrincipals) > 0 {
+			f.println("    ManageCertificates:")
+			for _, p := range ca.ManageCertificatesPrincipals {
+				f.printf("      - %s\n", p)
+			}
+		}
+
 		if len(ca.Vulnerabilities) > 0 {
 			f.printf("    %s %s\n",
 				f.red("[!] VULNERABLE:"),
@@ -98,6 +122,11 @@ func (f *TextFormatter) Format(result *adcs.FindResult) error {
 			f.printf("    Display Name: %s\n", tmpl.DisplayName)
 		}
 
+		// Published by CAs
+		if len(tmpl.PublishedBy) > 0 {
+			f.printf("    Published By: %s\n", f.dim(strings.Join(tmpl.PublishedBy, ", ")))
+		}
+
 		// Schema version
 		f.printf("    Schema Version: %d\n", tmpl.SchemaVersion)
 
@@ -106,13 +135,20 @@ func (f *TextFormatter) Format(result *adcs.FindResult) error {
 			f.printf("    Validity: %s\n", tmpl.ValidityPeriod)
 		}
 
-		// EKUs
+		// EKUs with Client Auth highlight
 		ekus := tmpl.GetEKUNames()
-		f.printf("    Extended Key Usage: %s\n", strings.Join(ekus, ", "))
+		ekuStr := strings.Join(ekus, ", ")
+		if tmpl.HasClientAuthEKU {
+			ekuStr = f.yellow(ekuStr)
+		}
+		f.printf("    Extended Key Usage: %s\n", ekuStr)
 
 		// Key flags
 		if tmpl.EnrolleeSuppliesSubject {
-			f.printf("    %s Enrollee Supplies Subject: Yes\n", f.yellow("[*]"))
+			f.printf("    %s Enrollee Supplies Subject: %s\n", f.yellow("[*]"), "ENROLLEE_SUPPLIES_SUBJECT")
+		}
+		if tmpl.EnrolleeSuppliesSubjectAltName {
+			f.printf("    %s Enrollee Supplies SAN: %s\n", f.yellow("[*]"), "ENROLLEE_SUPPLIES_SUBJECT_ALT_NAME")
 		}
 		if tmpl.RequiresManagerApproval {
 			f.printf("    %s Requires Manager Approval: Yes\n", f.yellow("[*]"))
@@ -123,6 +159,24 @@ func (f *TextFormatter) Format(result *adcs.FindResult) error {
 		if tmpl.NoSecurityExtension {
 			f.printf("    %s No Security Extension: Yes\n", f.yellow("[*]"))
 		}
+
+		// Private key exportable
+		if tmpl.PrivateKeyExportable {
+			f.printf("    Private Key Exportable: %s\n", f.green("Yes"))
+		} else {
+			f.printf("    Private Key Exportable: No\n")
+		}
+
+		// Enrollment flags
+		if len(tmpl.EnrollmentFlagNames) > 0 {
+			f.printf("    Enrollment Flags: %s\n", f.dim(strings.Join(tmpl.EnrollmentFlagNames, ", ")))
+		}
+
+		// Certificate Name Flags
+		if len(tmpl.NameFlagNames) > 0 {
+			f.printf("    Name Flags: %s\n", f.dim(strings.Join(tmpl.NameFlagNames, ", ")))
+		}
+
 		if len(tmpl.IssuancePolicies) > 0 {
 			f.printf("    %s Issuance Policies: %s\n", f.yellow("[*]"),
 				strings.Join(tmpl.IssuancePolicies, ", "))
@@ -172,11 +226,30 @@ func (f *TextFormatter) Format(result *adcs.FindResult) error {
 			}
 		}
 
-		// Vulnerabilities
+		// Vulnerabilities with color-coded severity
 		if len(tmpl.Vulnerabilities) > 0 {
-			f.printf("    %s %s\n",
-				f.red("[!] VULNERABLE:"),
-				f.red(strings.Join(tmpl.Vulnerabilities, ", ")))
+			vulnStr := strings.Join(tmpl.Vulnerabilities, ", ")
+			switch tmpl.Exploitability {
+			case "Exploitable":
+				f.printf("    %s %s %s\n",
+					f.red("[!] VULNERABLE:"),
+					f.red(vulnStr),
+					f.red("[EXPLOITABLE]"))
+			case "Conditional":
+				f.printf("    %s %s %s\n",
+					f.yellow("[!] VULNERABLE:"),
+					f.yellow(vulnStr),
+					f.yellow("[CONDITIONAL]"))
+			case "Requires Privileges":
+				f.printf("    %s %s %s\n",
+					f.magenta("[!] VULNERABLE:"),
+					f.magenta(vulnStr),
+					f.magenta("[REQUIRES PRIVILEGES]"))
+			default:
+				f.printf("    %s %s\n",
+					f.red("[!] VULNERABLE:"),
+					f.red(vulnStr))
+			}
 		}
 	}
 
@@ -187,8 +260,22 @@ func (f *TextFormatter) Format(result *adcs.FindResult) error {
 	f.println(f.bold("=" + strings.Repeat("=", 79)))
 	f.printf("  Certificate Authorities: %d\n", result.TotalCAs)
 	f.printf("  Certificate Templates: %d\n", result.TotalTemplates)
+
 	if result.VulnerableTemplates > 0 {
 		f.printf("  Vulnerable Templates: %s\n", f.red(fmt.Sprintf("%d", result.VulnerableTemplates)))
+
+		// Exploitability breakdown
+		if result.ExploitableTemplates > 0 {
+			f.printf("    Directly Exploitable: %s\n", f.red(fmt.Sprintf("%d", result.ExploitableTemplates)))
+		}
+		if result.ConditionalTemplates > 0 {
+			f.printf("    Conditional:          %s\n", f.yellow(fmt.Sprintf("%d", result.ConditionalTemplates)))
+		}
+
+		// ESC summary
+		if len(result.ExploitableESCs) > 0 {
+			f.printf("  ESCs Found: %s\n", f.red(strings.Join(result.ExploitableESCs, ", ")))
+		}
 	} else {
 		f.printf("  Vulnerable Templates: %s\n", f.green("0"))
 	}
@@ -239,4 +326,18 @@ func (f *TextFormatter) bold(s string) string {
 		return s
 	}
 	return colorBold + s + colorReset
+}
+
+func (f *TextFormatter) dim(s string) string {
+	if !f.Color {
+		return s
+	}
+	return colorDim + s + colorReset
+}
+
+func (f *TextFormatter) magenta(s string) string {
+	if !f.Color {
+		return s
+	}
+	return colorMagenta + s + colorReset
 }
