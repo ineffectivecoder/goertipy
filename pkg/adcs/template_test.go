@@ -218,6 +218,59 @@ func TestGetEKUNamesEmpty(t *testing.T) {
 	}
 }
 
+func TestHasExplicitClientAuth(t *testing.T) {
+	tests := []struct {
+		name     string
+		ekus     []string
+		policies []string
+		want     bool
+	}{
+		{
+			name: "client auth in EKU",
+			ekus: []string{flags.EKU_CLIENT_AUTH},
+			want: true,
+		},
+		{
+			name:     "client auth in application policies",
+			ekus:     []string{flags.EKU_SERVER_AUTH},
+			policies: []string{flags.EKU_CLIENT_AUTH},
+			want:     true,
+		},
+		{
+			name: "server auth only",
+			ekus: []string{flags.EKU_SERVER_AUTH},
+			want: false,
+		},
+		{
+			name: "no EKUs",
+			ekus: nil,
+			want: false,
+		},
+		{
+			name: "any purpose is not explicit client auth",
+			ekus: []string{flags.EKU_ANY_PURPOSE},
+			want: false,
+		},
+		{
+			name: "mixed EKUs with client auth",
+			ekus: []string{flags.EKU_SERVER_AUTH, flags.EKU_CODE_SIGNING, flags.EKU_CLIENT_AUTH},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &CertificateTemplate{
+				ExtendedKeyUsage:    tt.ekus,
+				ApplicationPolicies: tt.policies,
+			}
+			if got := tmpl.hasExplicitClientAuth(); got != tt.want {
+				t.Errorf("hasExplicitClientAuth() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func contains(s []string, v string) bool {
 	for _, item := range s {
 		if item == v {

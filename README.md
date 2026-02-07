@@ -386,6 +386,19 @@ goertipy/
 go test ./... -v
 ```
 
+### Test Coverage
+
+| Package | Tests | Coverage |
+|---------|-------|----------|
+| `pkg/adcs` | ESC1–ESC15 detection, EKU classification, flag parsing, file time duration, `hasExplicitClientAuth` | Vulnerability analysis, template properties |
+| `pkg/adcs` (modify) | Save/load round-trip, invalid JSON, missing fields, ESC1 flag computation, flag preservation | Template modification logic |
+| `pkg/adcs/flags` | `IsAuthenticationEKU`, `HasFlag`, `GetSetFlags` | Flag utilities and bitmask operations |
+| `pkg/output` | Text formatter (color/no-color), JSON formatter, enhanced fields (exploitability, endpoints, ManageCA) | Output rendering |
+| `pkg/ldap` | SID parsing and formatting | LDAP utilities |
+| `pkg/cert` | Certificate loading and inspection | Certificate handling |
+| `pkg/security` | Security descriptor parsing | ACL/ACE parsing |
+| `pkg/log` | Logger levels and formatting | Logging |
+
 ## Documentation
 
 See [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md) for protocol flow diagrams and technical internals of every command.
