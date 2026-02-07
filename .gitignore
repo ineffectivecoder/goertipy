@@ -1,0 +1,26 @@
+# Binaries
+goertipy
+*.exe
+
+# Certificates and keys
+*.pfx
+*.pem
+*.key
+*.cer
+*.crt
+*.p12
+
+# Kerberos
+*.ccache
+*.kirbi
+
+# Output files
+*.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
