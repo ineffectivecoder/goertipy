@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -14,29 +13,170 @@ import (
 
 	"github.com/oiweiwei/go-msrpc/dcerpc"
 	"github.com/oiweiwei/go-msrpc/msrpc/dcom"
-	"github.com/oiweiwei/go-msrpc/msrpc/dcom/csra"
-	icertadmind "github.com/oiweiwei/go-msrpc/msrpc/dcom/csra/icertadmind/v0"
-	icertadmind2 "github.com/oiweiwei/go-msrpc/msrpc/dcom/csra/icertadmind2/v0"
 	"github.com/oiweiwei/go-msrpc/msrpc/dcom/iactivation/v0"
 	"github.com/oiweiwei/go-msrpc/msrpc/dcom/iobjectexporter/v0"
-	"github.com/oiweiwei/go-msrpc/msrpc/dcom/oaut"
+
+	"github.com/oiweiwei/go-msrpc/msrpc/dcom/csra"
+	csra_client "github.com/oiweiwei/go-msrpc/msrpc/dcom/csra/client"
+	icertadmind "github.com/oiweiwei/go-msrpc/msrpc/dcom/csra/icertadmind/v0"
+	icertadmind2 "github.com/oiweiwei/go-msrpc/msrpc/dcom/csra/icertadmind2/v0"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
-	winreg "github.com/oiweiwei/go-msrpc/msrpc/rrp/winreg/v1"
-	"github.com/oiweiwei/go-msrpc/msrpc/well_known"
+	"github.com/oiweiwei/go-msrpc/msrpc/erref/hresult"
 	"github.com/oiweiwei/go-msrpc/ssp"
 	"github.com/oiweiwei/go-msrpc/ssp/credential"
 	"github.com/oiweiwei/go-msrpc/ssp/gssapi"
-	"golang.org/x/net/proxy"
 )
 
-// CertAdminCLSID is the CLSID for the CertAdmin DCOM class.
-// From certipy: CLSID_ICertAdminD = d99e6e73-fc88-11d0-b498-00a0c90312f3
-// (IID=d99e6e71, ICertRequestD IID=d99e6e72, CertAdmin CLSID=d99e6e73, CertRequestD CLSID=d99e6e74)
-var CertAdminCLSID = &dcom.ClassID{
-	Data1: 0xd99e6e73,
-	Data2: 0xfc88,
-	Data3: 0x11d0,
-	Data4: []byte{0xb4, 0x98, 0x00, 0xa0, 0xc9, 0x03, 0x12, 0xf3},
+// CertAdminClassID is the CLSID for the CertAdmin DCOM class (MS-CSRA §1.9).
+// ICertAdminD IID is d99e6e71-..., CLSID is d99e6e73-... (per Certipy/MS-CSRA).
+var CertAdminClassID = &dcom.ClassID{Data1: 0xd99e6e73, Data2: 0xfc88, Data3: 0x11d0,
+	Data4: []byte{0xb4, 0x98, 0x00, 0xa0, 0xc9, 0x03, 0x12, 0xf3}}
+
+// AdminClient wraps the ICertAdminD/D2 DCOM interfaces for CA administration.
+// Uses proper DCOM activation via RemoteActivation on port 135 + OXID bindings.
+type AdminClient struct {
+	client     csra_client.Client
+	remoteIPID *dcom.IPID
+	conns      []dcerpc.Conn
+}
+
+// AdminOptions holds connection options for the admin client.
+type AdminOptions struct {
+	Server   string
+	Username string
+	Password string
+	NTHash   string
+	Domain   string
+	ProxyURL string // SOCKS5 proxy URL (reserved for future use)
+	Debug    bool
+}
+
+// ConnectAdmin establishes a DCOM connection to the CA's ICertAdminD/D2
+// interfaces using proper DCOM object activation (RemoteActivation).
+func ConnectAdmin(ctx context.Context, opts *AdminOptions) (*AdminClient, error) {
+	// Register credentials for NTLM.
+	if opts.Password != "" {
+		gssapi.AddCredential(credential.NewFromPassword(opts.Username, opts.Password,
+			credential.Domain(strings.ToUpper(opts.Domain))))
+	} else if opts.NTHash != "" {
+		hashBytes, err := hex.DecodeString(opts.NTHash)
+		if err != nil {
+			return nil, fmt.Errorf("invalid NT hash hex: %w", err)
+		}
+		gssapi.AddCredential(credential.NewFromNTHashBytes(opts.Username, hashBytes,
+			credential.Domain(strings.ToUpper(opts.Domain))))
+	} else {
+		return nil, fmt.Errorf("either password or NT hash is required")
+	}
+	gssapi.AddMechanism(ssp.NTLM)
+
+	ctx = gssapi.NewSecurityContext(ctx)
+
+	clientOpts := []dcerpc.Option{
+		dcerpc.WithSeal(),
+		dcerpc.WithTargetName(opts.Server),
+	}
+
+	admin := &AdminClient{}
+
+	// Step 1: Dial port 135 (OX resolver well-known endpoint).
+	if opts.Debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Connecting to OX resolver on %s:135\n", opts.Server)
+	}
+	cc, err := dcerpc.Dial(ctx, net.JoinHostPort(opts.Server, "135"), clientOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to OX resolver on %s: %w", opts.Server, err)
+	}
+	admin.conns = append(admin.conns, cc)
+
+	// Step 2: ObjectExporter — get COM version via ServerAlive2.
+	if opts.Debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Querying ServerAlive2 for COM version\n")
+	}
+	oxCli, err := iobjectexporter.NewObjectExporterClient(ctx, cc, clientOpts...)
+	if err != nil {
+		admin.Close()
+		return nil, fmt.Errorf("failed to create ObjectExporter client: %w", err)
+	}
+
+	srv, err := oxCli.ServerAlive2(ctx, &iobjectexporter.ServerAlive2Request{})
+	if err != nil {
+		admin.Close()
+		return nil, fmt.Errorf("ServerAlive2 failed: %w", err)
+	}
+
+	if opts.Debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] COM version: %d.%d\n",
+			srv.COMVersion.MajorVersion, srv.COMVersion.MinorVersion)
+	}
+
+	// Step 3: RemoteActivation — activate the CertAdmin DCOM object.
+	if opts.Debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] Activating CertAdmin DCOM object (CLSID: %v)\n",
+			CertAdminClassID.GUID())
+	}
+	actCli, err := iactivation.NewActivationClient(ctx, cc, clientOpts...)
+	if err != nil {
+		admin.Close()
+		return nil, fmt.Errorf("failed to create Activation client: %w", err)
+	}
+
+	act, err := actCli.RemoteActivation(ctx, &iactivation.RemoteActivationRequest{
+		ORPCThis: &dcom.ORPCThis{Version: srv.COMVersion},
+		ClassID:  CertAdminClassID.GUID(),
+		IIDs:     []*dcom.IID{icertadmind2.CertAdminD2IID},
+		// Protocol sequence 7 = ncacn_ip_tcp (TCP/IP).
+		RequestedProtocolSequences: []uint16{7},
+	})
+	if err != nil {
+		admin.Close()
+		return nil, fmt.Errorf("RemoteActivation failed: %w", err)
+	}
+
+	if act.HResult != 0 {
+		admin.Close()
+		return nil, fmt.Errorf("RemoteActivation HRESULT error: %s", hresult.FromCode(uint32(act.HResult)))
+	}
+
+	if opts.Debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] DCOM activation successful, IPID: %v\n",
+			act.InterfaceData[0].IPID())
+		fmt.Fprintf(os.Stderr, "[DEBUG] RemoteUnknown IPID: %v\n", act.RemoteUnknown)
+	}
+
+	// Step 4: Dial the OXID bindings (dynamic port returned by activation).
+	wcc, err := dcerpc.Dial(ctx, opts.Server,
+		append(clientOpts, act.OXIDBindings.EndpointsByProtocol("ncacn_ip_tcp")...)...)
+	if err != nil {
+		admin.Close()
+		return nil, fmt.Errorf("failed to connect to OXID binding: %w", err)
+	}
+	admin.conns = append(admin.conns, wcc)
+
+	// Step 5: Create the CSRA client set (ICertAdminD + ICertAdminD2).
+	ctx = gssapi.NewSecurityContext(ctx)
+
+	client, err := csra_client.NewClient(ctx, wcc,
+		append(clientOpts, dcom.WithIPID(act.InterfaceData[0].IPID()))...)
+	if err != nil {
+		admin.Close()
+		return nil, fmt.Errorf("failed to create CSRA client: %w", err)
+	}
+	admin.client = client
+	admin.remoteIPID = act.InterfaceData[0].IPID()
+
+	if opts.Debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] CSRA client created successfully\n")
+	}
+
+	return admin, nil
+}
+
+// Close releases all admin client connections.
+func (a *AdminClient) Close() {
+	for _, cc := range a.conns {
+		cc.Close(context.Background())
+	}
 }
 
 // Revocation reason codes from MS-CSRA / RFC 3280 §5.3.1
@@ -51,12 +191,6 @@ const (
 	RevokeReasonRemoveFromCRL      uint32 = 8
 	RevokeReasonReleaseFromHold    uint32 = 0xffffffff
 )
-
-// CR_PROP_TEMPLATES is the property ID for certificate templates on a CA.
-const CR_PROP_TEMPLATES int32 = 0x1D
-
-// PROPTYPE_STRING indicates Unicode string data in CA property requests.
-const PROPTYPE_STRING int32 = 4
 
 // RevocationReasonNames maps reason codes to human-readable names.
 var RevocationReasonNames = map[uint32]string{
@@ -108,190 +242,6 @@ func NormalizeSerialNumber(serial string) string {
 	return strings.ToUpper(serial)
 }
 
-// AdminClient wraps the ICertAdminD/D2 DCOM interfaces for CA administration.
-// Uses proper DCOM object activation via RemoteActivation on port 135.
-type AdminClient struct {
-	adminD     icertadmind.CertAdminDClient
-	adminD2    icertadmind2.CertAdminD2Client
-	ipidD      *dcom.IPID // IPID for ICertAdminD
-	ipidD2     *dcom.IPID // IPID for ICertAdminD2
-	comVersion *dcom.COMVersion
-	conns      []dcerpc.Conn
-	server     string // server address for lazy winreg connection
-}
-
-// AdminOptions holds connection options for the admin client.
-type AdminOptions struct {
-	Server   string
-	Username string
-	Password string
-	NTHash   string
-	Domain   string
-	ProxyURL string // SOCKS5 proxy URL (e.g., socks5://127.0.0.1:1080)
-	Debug    bool
-}
-
-// ConnectAdmin establishes a DCOM connection to the CA's ICertAdminD/D2
-// interfaces using proper DCOM object activation:
-//  1. Dial port 135 (OX resolver well-known endpoint)
-//  2. ObjectExporter.ServerAlive2 to get COM version
-//  3. Activation.RemoteActivation with CertAdmin CLSID and both IIDs
-//  4. Dial the returned OXID bindings
-//  5. Create individual interface clients with correct IPIDs
-func ConnectAdmin(ctx context.Context, opts *AdminOptions) (*AdminClient, error) {
-	// Register credentials for NTLM.
-	if opts.Password != "" {
-		gssapi.AddCredential(credential.NewFromPassword(opts.Username, opts.Password,
-			credential.Domain(strings.ToUpper(opts.Domain))))
-	} else if opts.NTHash != "" {
-		hashBytes, err := hex.DecodeString(opts.NTHash)
-		if err != nil {
-			return nil, fmt.Errorf("invalid NT hash hex: %w", err)
-		}
-		gssapi.AddCredential(credential.NewFromNTHashBytes(opts.Username, hashBytes,
-			credential.Domain(strings.ToUpper(opts.Domain))))
-	} else {
-		return nil, fmt.Errorf("either password or NT hash is required")
-	}
-	gssapi.AddMechanism(ssp.NTLM)
-
-	ctx = gssapi.NewSecurityContext(ctx)
-
-	baseOpts := []dcerpc.Option{
-		dcerpc.WithSeal(),
-		dcerpc.WithTargetName(opts.Server),
-	}
-
-	// If a SOCKS proxy is configured, create a dialer and inject it.
-	if opts.ProxyURL != "" {
-		proxyDialer, err := newProxyDialer(opts.ProxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("proxy setup failed: %w", err)
-		}
-		baseOpts = append(baseOpts, dcerpc.WithDialer(proxyDialer))
-		if opts.Debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Using SOCKS proxy: %s\n", opts.ProxyURL)
-		}
-	}
-
-	admin := &AdminClient{}
-
-	// Step 1: Dial port 135 (well-known OX resolver endpoint).
-	if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Connecting to OX resolver on %s:135\n", opts.Server)
-	}
-	cc, err := dcerpc.Dial(ctx, opts.Server, append(baseOpts, well_known.EndpointMapper())...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial OX resolver on %s: %w", opts.Server, err)
-	}
-	admin.conns = append(admin.conns, cc)
-
-	// Step 2: ObjectExporter.ServerAlive2 to get COM version and bindings.
-	if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Calling ServerAlive2\n")
-	}
-	oxCli, err := iobjectexporter.NewObjectExporterClient(ctx, cc, baseOpts...)
-	if err != nil {
-		admin.Close()
-		return nil, fmt.Errorf("failed to create ObjectExporter client: %w", err)
-	}
-
-	srv, err := oxCli.ServerAlive2(ctx, &iobjectexporter.ServerAlive2Request{})
-	if err != nil {
-		admin.Close()
-		return nil, fmt.Errorf("ServerAlive2 failed: %w", err)
-	}
-	admin.comVersion = srv.COMVersion
-	if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] COM version: %d.%d\n",
-			srv.COMVersion.MajorVersion, srv.COMVersion.MinorVersion)
-	}
-
-	// Step 3: RemoteActivation with CertAdmin CLSID and both IIDs.
-	if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] Activating CertAdmin DCOM object (CLSID: %v)\n", CertAdminCLSID)
-	}
-	iactCli, err := iactivation.NewActivationClient(ctx, cc, baseOpts...)
-	if err != nil {
-		admin.Close()
-		return nil, fmt.Errorf("failed to create Activation client: %w", err)
-	}
-
-	act, err := iactCli.RemoteActivation(ctx, &iactivation.RemoteActivationRequest{
-		ORPCThis: &dcom.ORPCThis{Version: srv.COMVersion},
-		ClassID:  CertAdminCLSID.GUID(),
-		IIDs: []*dcom.IID{
-			icertadmind.CertAdminDIID,
-			icertadmind2.CertAdminD2IID,
-		},
-		// 7 = ncacn_ip_tcp, 15 = ncacn_np
-		RequestedProtocolSequences: []uint16{7, 15},
-	})
-	if err != nil {
-		admin.Close()
-		return nil, fmt.Errorf("RemoteActivation failed: %w", err)
-	}
-	if act.HResult != 0 {
-		admin.Close()
-		return nil, fmt.Errorf("RemoteActivation returned HRESULT 0x%08x", act.HResult)
-	}
-
-	if len(act.InterfaceData) < 2 {
-		admin.Close()
-		return nil, fmt.Errorf("RemoteActivation returned %d interfaces, expected 2", len(act.InterfaceData))
-	}
-
-	admin.ipidD = act.InterfaceData[0].IPID()
-	admin.ipidD2 = act.InterfaceData[1].IPID()
-
-	if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] DCOM activation successful\n")
-		fmt.Fprintf(os.Stderr, "[DEBUG]   ICertAdminD  IPID: %v\n", admin.ipidD)
-		fmt.Fprintf(os.Stderr, "[DEBUG]   ICertAdminD2 IPID: %v\n", admin.ipidD2)
-	}
-
-	// Step 4: Dial the OXID bindings (dynamic TCP port returned by activation).
-	wcc, err := dcerpc.Dial(ctx, opts.Server, append(baseOpts,
-		act.OXIDBindings.EndpointsByProtocol("ncacn_ip_tcp")...)...)
-	if err != nil {
-		admin.Close()
-		return nil, fmt.Errorf("failed to dial OXID endpoint: %w", err)
-	}
-	admin.conns = append(admin.conns, wcc)
-
-	// Step 5: Create individual interface clients.
-	ctx = gssapi.NewSecurityContext(ctx)
-
-	adminD, err := icertadmind.NewCertAdminDClient(ctx, wcc, baseOpts...)
-	if err != nil {
-		admin.Close()
-		return nil, fmt.Errorf("failed to create ICertAdminD client: %w", err)
-	}
-	admin.adminD = adminD
-
-	adminD2, err := icertadmind2.NewCertAdminD2Client(ctx, wcc, baseOpts...)
-	if err != nil {
-		admin.Close()
-		return nil, fmt.Errorf("failed to create ICertAdminD2 client: %w", err)
-	}
-	admin.adminD2 = adminD2
-
-	admin.server = opts.Server
-
-	if opts.Debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] CSRA admin client created successfully\n")
-	}
-
-	return admin, nil
-}
-
-// Close releases all admin client connections.
-func (a *AdminClient) Close() {
-	for _, cc := range a.conns {
-		cc.Close(context.Background())
-	}
-}
-
 // RevokeOptions holds parameters for certificate revocation.
 type RevokeOptions struct {
 	// CA is the CA authority name (e.g., "host\ca-name" or just "ca-name").
@@ -336,15 +286,15 @@ func (a *AdminClient) RevokeCertificate(ctx context.Context, opts *RevokeOptions
 		ft = &dtyp.Filetime{} // zero = immediate
 	}
 
-	_, err := a.adminD.RevokeCertificate(ctx, &icertadmind.RevokeCertificateRequest{
-		This:         &dcom.ORPCThis{Version: a.comVersion},
+	_, err := a.client.CertAdminD().RevokeCertificate(ctx, &icertadmind.RevokeCertificateRequest{
+		This:         &dcom.ORPCThis{Version: &dcom.COMVersion{MajorVersion: 5, MinorVersion: 7}},
 		Authority:    authority,
 		SerialNumber: serial,
 		Reason:       opts.Reason,
 		FileTime:     ft,
-	}, dcom.WithIPID(a.ipidD))
+	})
 	if err != nil {
-		return fmt.Errorf("RevokeCertificate RPC failed: %s", formatRPCError(err))
+		return fmt.Errorf("RevokeCertificate RPC failed: %w", err)
 	}
 
 	return nil
@@ -358,10 +308,11 @@ type ConfigEntry struct {
 }
 
 // Known config entries for DumpConfig.
-// NOTE: Entries returning VT_ARRAY|VT_BSTR (string arrays) are excluded because
-// go-msrpc v1.2.14 panics on SafeArray VARIANT deserialization.
-// Excluded: CRLPublicationURLs, CACertPublicationURLs, EnableRequestExtensionList,
-// DisableExtensionList.
+// NOTE: Only scalar-typed entries (int/string) are listed here.
+// Array-typed entries (CRLPublicationURLs, CACertPublicationURLs,
+// EnableRequestExtensionList, DisableExtensionList) are excluded because
+// go-msrpc's VARIANT unmarshaler panics on SafeArray responses.
+// Use RRP (Remote Registry Protocol) for those entries instead.
 var knownConfigEntries = []struct {
 	NodePath    string
 	Entry       string
@@ -385,20 +336,20 @@ func (a *AdminClient) GetConfigEntry(ctx context.Context, authority, nodePath, e
 		authority = authority[idx+1:]
 	}
 
-	resp, err := a.adminD2.GetConfigEntry(ctx, &icertadmind2.GetConfigEntryRequest{
-		This:      &dcom.ORPCThis{Version: a.comVersion},
+	resp, err := a.client.CertAdminD2().GetConfigEntry(ctx, &icertadmind2.GetConfigEntryRequest{
+		This:      &dcom.ORPCThis{Version: &dcom.COMVersion{MajorVersion: 5, MinorVersion: 7}},
 		Authority: authority,
 		NodePath:  nodePath,
 		Entry:     entry,
-	}, dcom.WithIPID(a.ipidD2))
+	})
 	if err != nil {
-		return nil, fmt.Errorf("GetConfigEntry(%s\\%s): %s", nodePath, entry, formatRPCError(err))
+		return nil, fmt.Errorf("GetConfigEntry(%s\\%s) failed: %w", nodePath, entry, err)
 	}
 
-	// Extract value from VARIANT, unwrapping BSTR strings.
+	// Extract value from VARIANT.
 	var value interface{}
 	if resp.Variant != nil && resp.Variant.VarUnion != nil {
-		value = extractVariantValue(resp.Variant.VarUnion)
+		value = resp.Variant.VarUnion.GetValue()
 	}
 
 	return &ConfigEntry{
@@ -409,492 +360,183 @@ func (a *AdminClient) GetConfigEntry(ctx context.Context, authority, nodePath, e
 }
 
 // DumpConfig retrieves all known configuration entries from the CA.
-// Entries that fail via CSRA (e.g., not found) are retried via RRP (Remote Registry).
+// Entries that fail (e.g., not found) are skipped with a warning to stderr.
 func (a *AdminClient) DumpConfig(ctx context.Context, authority string, debug bool) ([]ConfigEntry, error) {
 	var entries []ConfigEntry
-	var failedCSRA []struct {
-		NodePath, Entry, Description string
-	}
 
 	for _, known := range knownConfigEntries {
-		entry, err := a.safeGetConfigEntry(ctx, authority, known.NodePath, known.Entry)
+		entry, err := a.GetConfigEntry(ctx, authority, known.NodePath, known.Entry)
 		if err != nil {
 			if debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] CSRA failed for %s\\%s: %v\n", known.NodePath, known.Entry, err)
+				fmt.Fprintf(os.Stderr, "[DEBUG] Skipping %s\\%s: %v\n", known.NodePath, known.Entry, err)
 			}
-			failedCSRA = append(failedCSRA, struct {
-				NodePath, Entry, Description string
-			}{known.NodePath, known.Entry, known.Description})
 			continue
 		}
 		entries = append(entries, *entry)
 	}
 
-	// Fallback to RRP (Remote Registry) for entries that CSRA couldn't provide.
-	if len(failedCSRA) > 0 {
-		rrpEntries, err := a.registryFallbackConfig(ctx, authority, failedCSRA, debug)
-		if err != nil {
-			if debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] RRP fallback failed: %v\n", err)
-			}
-		} else {
-			entries = append(entries, rrpEntries...)
-		}
-	}
-
 	return entries, nil
 }
 
-// safeGetConfigEntry wraps GetConfigEntry with panic recovery for go-msrpc
-// NDR deserialization bugs (e.g., SafeArray responses cause panics).
-func (a *AdminClient) safeGetConfigEntry(ctx context.Context, authority, nodePath, entry string) (result *ConfigEntry, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("NDR deserialization panic for %s\\%s: %v", nodePath, entry, r)
-		}
-	}()
-	return a.GetConfigEntry(ctx, authority, nodePath, entry)
-}
+// Template management constants (MS-WCCE §3.2.1.4.3.2).
+const (
+	crPropTemplates int32 = 0x1d // CR_PROP_TEMPLATES
+	propTypeString  int32 = 4    // PROPTYPE_STRING
+)
 
-// rrpStr creates a null-terminated winreg.UnicodeString for RRP operations.
-// The RRP protocol requires null-terminated strings, but go-msrpc's
-// UnicodeString marshal doesn't auto-add the null terminator.
-func rrpStr(s string) *winreg.UnicodeString {
-	return &winreg.UnicodeString{Buffer: s + "\x00"}
-}
-
-// registryFallbackConfig reads CA config entries from the remote registry via RRP
-// when CSRA's GetConfigEntry fails (typically with ERROR_FILE_NOT_FOUND).
-// Registry base key: HKLM\SYSTEM\CurrentControlSet\Services\CertSvc\Configuration\<CA-name>
-func (a *AdminClient) registryFallbackConfig(ctx context.Context, authority string, failed []struct{ NodePath, Entry, Description string }, debug bool) ([]ConfigEntry, error) {
-	// Strip host\ prefix from authority to get bare CA name.
-	caName := authority
-	if idx := strings.LastIndex(caName, "\\"); idx >= 0 {
-		caName = caName[idx+1:]
-	}
-
-	// Connect to winreg via SMB named pipe.
-	pipeAddr := fmt.Sprintf("ncacn_np:%s[\\pipe\\winreg]", a.server)
-	if debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] RRP: connecting to %s\n", pipeAddr)
-	}
-
-	ctx = gssapi.NewSecurityContext(ctx)
-
-	cc, err := dcerpc.Dial(ctx, pipeAddr,
-		dcerpc.WithSeal(),
-		dcerpc.WithTargetName(a.server))
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to winreg: %w", err)
-	}
-	defer cc.Close(ctx)
-
-	wrClient, err := winreg.NewWinregClient(ctx, cc,
-		dcerpc.WithSeal(),
-		dcerpc.WithTargetName(a.server))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create winreg client: %w", err)
-	}
-
-	// Open HKLM
-	hlmResp, err := wrClient.OpenLocalMachine(ctx, &winreg.OpenLocalMachineRequest{
-		DesiredAccess: winreg.KeyQueryValue | winreg.KeyEnumerateSubKeys,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("OpenLocalMachine failed: %w", err)
-	}
-	if hlmResp.Return != 0 {
-		return nil, fmt.Errorf("OpenLocalMachine returned error: %d", hlmResp.Return)
-	}
-	hlmKey := hlmResp.Key
-	defer wrClient.BaseRegCloseKey(ctx, &winreg.BaseRegCloseKeyRequest{Key: hlmKey}) //nolint:errcheck
-
-	// Open the CA config base key
-	caRegPath := fmt.Sprintf("SYSTEM\\CurrentControlSet\\Services\\CertSvc\\Configuration\\%s", caName)
-	if debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] RRP: opening key %s\n", caRegPath)
-	}
-
-	caKeyResp, err := wrClient.BaseRegOpenKey(ctx, &winreg.BaseRegOpenKeyRequest{
-		Key:           hlmKey,
-		SubKey:        rrpStr(caRegPath),
-		DesiredAccess: winreg.KeyQueryValue | winreg.KeyEnumerateSubKeys,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("BaseRegOpenKey(%s) failed: %w", caRegPath, err)
-	}
-	if caKeyResp.Return != 0 {
-		return nil, fmt.Errorf("BaseRegOpenKey(%s) returned error: %d", caRegPath, caKeyResp.Return)
-	}
-	caKey := caKeyResp.ResultKey
-	defer wrClient.BaseRegCloseKey(ctx, &winreg.BaseRegCloseKeyRequest{Key: caKey}) //nolint:errcheck
-
-	// Map CSRA NodePath\Entry → registry subkey\valuename
-	// CSRA uses:  NodePath="Policy", Entry="EditFlags"
-	// Registry:   CA-key\PolicyModules\CertificateAuthority_MicrosoftDefault.Policy\EditFlags
-	registryMap := map[string]struct {
-		subKey    string
-		valueName string
-	}{
-		"Policy\\EditFlags":          {"PolicyModules\\CertificateAuthority_MicrosoftDefault.Policy", "EditFlags"},
-		"Policy\\RequestDisposition": {"PolicyModules\\CertificateAuthority_MicrosoftDefault.Policy", "RequestDisposition"},
-		"\\InterfaceFlags":           {"", "InterfaceFlags"},
-	}
-
-	var entries []ConfigEntry
-
-	for _, f := range failed {
-		lookupKey := f.NodePath + "\\" + f.Entry
-		regInfo, ok := registryMap[lookupKey]
-		if !ok {
-			if debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] RRP: no registry mapping for %s\n", lookupKey)
-			}
-			continue
-		}
-
-		// Determine which key to query — subkey of caKey, or caKey itself.
-		queryKey := caKey
-		if regInfo.subKey != "" {
-			subResp, err := wrClient.BaseRegOpenKey(ctx, &winreg.BaseRegOpenKeyRequest{
-				Key:           caKey,
-				SubKey:        rrpStr(regInfo.subKey),
-				DesiredAccess: winreg.KeyQueryValue | winreg.KeyEnumerateSubKeys,
-			})
-			if err != nil {
-				if debug {
-					fmt.Fprintf(os.Stderr, "[DEBUG] RRP: failed to open subkey %s: %v\n", regInfo.subKey, err)
-				}
-				continue
-			}
-			if subResp.Return != 0 {
-				if debug {
-					fmt.Fprintf(os.Stderr, "[DEBUG] RRP: open subkey %s returned %d\n", regInfo.subKey, subResp.Return)
-				}
-				continue
-			}
-			queryKey = subResp.ResultKey
-			defer wrClient.BaseRegCloseKey(ctx, &winreg.BaseRegCloseKeyRequest{Key: queryKey}) //nolint:errcheck
-		}
-
-		// Query the DWORD value
-		bufSize := uint32(4) // DWORD = 4 bytes
-		qvResp, err := wrClient.BaseRegQueryValue(ctx, &winreg.BaseRegQueryValueRequest{
-			Key:        queryKey,
-			ValueName:  rrpStr(regInfo.valueName),
-			Data:       make([]byte, bufSize),
-			DataLength: bufSize,
-			Length:     bufSize,
-		})
-		if err != nil {
-			if debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] RRP: QueryValue(%s) failed: %v\n", regInfo.valueName, err)
-			}
-			continue
-		}
-		if qvResp.Return != 0 {
-			if debug {
-				fmt.Fprintf(os.Stderr, "[DEBUG] RRP: QueryValue(%s) returned %d\n", regInfo.valueName, qvResp.Return)
-			}
-			continue
-		}
-
-		// Parse DWORD (REG_DWORD = type 4)
-		var value interface{}
-		if len(qvResp.Data) >= 4 {
-			value = int32(binary.LittleEndian.Uint32(qvResp.Data[:4]))
-		}
-
-		if debug {
-			fmt.Fprintf(os.Stderr, "[DEBUG] RRP: %s\\%s = %v (via registry)\n", f.NodePath, f.Entry, value)
-		}
-
-		entries = append(entries, ConfigEntry{
-			NodePath: f.NodePath,
-			Entry:    f.Entry,
-			Value:    value,
-		})
-	}
-
-	return entries, nil
-}
-
-// extractVariantValue gets the underlying Go value from a VARIANT union,
-// unwrapping BSTR (FlaggedWordBlob) to plain strings and dereferencing pointers.
-func extractVariantValue(vu *oaut.Variant_VarUnion) interface{} {
-	raw := vu.GetValue()
-	if raw == nil {
-		return nil
-	}
-
-	// Unwrap oaut.String (FlaggedWordBlob) → plain string.
-	switch v := raw.(type) {
-	case *oaut.String:
-		if v != nil {
-			return v.Data
-		}
-		return ""
-	case *int32:
-		if v != nil {
-			return *v
-		}
-		return int32(0)
-	case *uint32:
-		if v != nil {
-			return *v
-		}
-		return uint32(0)
-	default:
-		return raw
-	}
-}
-
-// Common HRESULT/Win32 error codes returned by CA config operations.
-var hresultNames = map[uint32]string{
-	0x80070002: "ERROR_FILE_NOT_FOUND (entry not found)",
-	0x80070005: "E_ACCESSDENIED",
-	0x80070057: "E_INVALIDARG",
-	0x800706BA: "RPC_S_SERVER_UNAVAILABLE",
-	0x800706D1: "RPC_S_PROCNUM_OUT_OF_RANGE",
-	0x80070032: "ERROR_NOT_SUPPORTED",
-	0x80004005: "E_FAIL",
-	0x80040154: "REGDB_E_CLASSNOTREG",
-}
-
-// formatRPCError extracts and formats HRESULT codes from RPC error strings.
-func formatRPCError(err error) string {
-	s := err.Error()
-
-	// Try to extract a decimal error code (e.g., "error: -2147024894")
-	// and convert to hex HRESULT.
-	for _, prefix := range []string{"error: ", "error: code: "} {
-		if idx := strings.LastIndex(s, prefix); idx >= 0 {
-			numStr := strings.TrimSpace(s[idx+len(prefix):])
-			var code int64
-			if _, scanErr := fmt.Sscanf(numStr, "%d", &code); scanErr == nil {
-				hr := uint32(code)
-				if name, ok := hresultNames[hr]; ok {
-					return fmt.Sprintf("0x%08X %s", hr, name)
-				}
-				return fmt.Sprintf("HRESULT 0x%08X", hr)
-			}
-			// Already hex?
-			if _, scanErr := fmt.Sscanf(numStr, "0x%x", &code); scanErr == nil {
-				hr := uint32(code)
-				if name, ok := hresultNames[hr]; ok {
-					return fmt.Sprintf("0x%08X %s", hr, name)
-				}
-				return fmt.Sprintf("HRESULT 0x%08X", hr)
-			}
-		}
-	}
-
-	return s
-}
-
-// proxyDialer adapts a proxy.ContextDialer to satisfy dcerpc.Dialer.
-type proxyDialer struct {
-	dialer proxy.ContextDialer
-}
-
-func (p *proxyDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	return p.dialer.DialContext(ctx, network, address)
-}
-
-// newProxyDialer creates a dcerpc-compatible dialer from a SOCKS proxy URL.
-func newProxyDialer(proxyURL string) (*proxyDialer, error) {
-	// Add socks5 scheme if bare host:port.
-	if !strings.Contains(proxyURL, "://") {
-		proxyURL = "socks5://" + proxyURL
-	}
-
-	parsed, err := url.Parse(proxyURL)
-	if err != nil {
-		return nil, fmt.Errorf("invalid proxy URL %q: %w", proxyURL, err)
-	}
-
-	d, err := proxy.FromURL(parsed, proxy.Direct)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create proxy dialer: %w", err)
-	}
-
-	ctxDialer, ok := d.(proxy.ContextDialer)
-	if !ok {
-		return nil, fmt.Errorf("proxy dialer for %q does not support DialContext", proxyURL)
-	}
-
-	return &proxyDialer{dialer: ctxDialer}, nil
-}
-
-// GetTemplates returns the list of certificate templates enabled on the CA.
-// Templates are returned as alternating name/OID pairs: [name1, oid1, name2, oid2, ...].
-func (c *AdminClient) GetTemplates(ctx context.Context, caName string) ([]string, error) {
-	blob, err := c.getRawTemplateBlob(ctx, caName)
-	if err != nil {
-		return nil, err
-	}
-	if blob == nil || len(blob.Buffer) == 0 {
-		return nil, nil
-	}
-
-	decoded := decodeUTF16LE(blob.Buffer)
-	parts := strings.Split(decoded, "\n")
-
-	// Filter empty strings (trailing newline/null produces them)
-	var templates []string
-	for _, p := range parts {
-		if p != "" {
-			templates = append(templates, p)
-		}
-	}
-	return templates, nil
-}
-
-// getRawTemplateBlob returns the raw CertTransportBlob from GetCAProperty(CR_PROP_TEMPLATES).
-func (c *AdminClient) getRawTemplateBlob(ctx context.Context, caName string) (*csra.CertTransportBlob, error) {
-	resp, err := c.adminD2.GetCAProperty(ctx, &icertadmind2.GetCAPropertyRequest{
-		This:          &dcom.ORPCThis{Version: c.comVersion},
-		Authority:     caName,
-		PropertyID:    CR_PROP_TEMPLATES,
-		PropertyIndex: 0,
-		PropertyType:  PROPTYPE_STRING,
-	}, dcom.WithIPID(c.ipidD2))
-	if err != nil {
-		return nil, fmt.Errorf("GetCAProperty(CR_PROP_TEMPLATES) failed: %w", err)
-	}
-	return resp.PropertyValue, nil
-}
-
-// EnableTemplate adds a certificate template to the CA's enabled template list.
-// templateName is the CN and templateOID is the msPKI-Cert-Template-OID of the template.
-func (c *AdminClient) EnableTemplate(ctx context.Context, caName, templateName, templateOID string) error {
-	blob, err := c.getRawTemplateBlob(ctx, caName)
-	if err != nil {
-		return fmt.Errorf("failed to get current templates: %w", err)
-	}
-
-	// Check if already enabled by decoding for comparison
-	if blob != nil && len(blob.Buffer) > 0 {
-		decoded := decodeUTF16LE(blob.Buffer)
-		parts := strings.Split(decoded, "\n")
-		for i := 0; i < len(parts)-1; i += 2 {
-			if strings.EqualFold(parts[i], templateName) {
-				return fmt.Errorf("template %q is already enabled on the CA", templateName)
-			}
-		}
-	}
-
-	// Encode the new template entry as UTF-16LE: "name\nOID\n"
-	entry := templateName + "\n" + templateOID + "\n"
-	entryBytes := encodeUTF16LE(entry)
-	// Strip the null terminator added by encodeUTF16LE (last 2 bytes)
-	entryBytes = entryBytes[:len(entryBytes)-2]
-
-	// Prepend to existing buffer
-	var newBuffer []byte
-	if blob != nil && len(blob.Buffer) > 0 {
-		newBuffer = append(entryBytes, blob.Buffer...)
-	} else {
-		newBuffer = entryBytes
-	}
-
-	return c.setTemplateBlob(ctx, caName, &csra.CertTransportBlob{
-		Length: uint32(len(newBuffer)),
-		Buffer: newBuffer,
-	})
-}
-
-// DisableTemplate removes a certificate template from the CA's enabled template list.
-func (c *AdminClient) DisableTemplate(ctx context.Context, caName, templateName string) error {
-	blob, err := c.getRawTemplateBlob(ctx, caName)
-	if err != nil {
-		return fmt.Errorf("failed to get current templates: %w", err)
-	}
-
-	if blob == nil || len(blob.Buffer) == 0 {
-		return fmt.Errorf("template %q is not enabled on the CA (no templates found)", templateName)
-	}
-
-	// Find the template in the raw buffer by scanning UTF-16LE newline-separated entries.
-	// Format: name1\nOID1\nname2\nOID2\n...
-	// We need to find the byte offset of the target "name\nOID\n" pair and remove it.
-	decoded := decodeUTF16LE(blob.Buffer)
-	parts := strings.Split(decoded, "\n")
-
-	// Find which template pair to remove
-	found := false
-	charOffset := 0
-	removeCharLen := 0
-	pos := 0
-	for i := 0; i < len(parts)-1; i += 2 {
-		entryLen := len([]rune(parts[i])) + 1 + len([]rune(parts[i+1])) + 1 // name + \n + OID + \n
-		if strings.EqualFold(parts[i], templateName) {
-			found = true
-			charOffset = pos
-			removeCharLen = entryLen
-			break
-		}
-		pos += entryLen
-	}
-
-	if !found {
-		return fmt.Errorf("template %q is not enabled on the CA", templateName)
-	}
-
-	// Remove the corresponding bytes from the raw buffer (each char = 2 bytes in UTF-16LE)
-	byteStart := charOffset * 2
-	byteEnd := (charOffset + removeCharLen) * 2
-	if byteEnd > len(blob.Buffer) {
-		byteEnd = len(blob.Buffer)
-	}
-
-	newBuffer := make([]byte, 0, len(blob.Buffer)-byteEnd+byteStart)
-	newBuffer = append(newBuffer, blob.Buffer[:byteStart]...)
-	newBuffer = append(newBuffer, blob.Buffer[byteEnd:]...)
-
-	return c.setTemplateBlob(ctx, caName, &csra.CertTransportBlob{
-		Length: uint32(len(newBuffer)),
-		Buffer: newBuffer,
-	})
-}
-
-// setTemplateBlob writes the template blob back to the CA via SetCAProperty.
-func (c *AdminClient) setTemplateBlob(ctx context.Context, caName string, blob *csra.CertTransportBlob) error {
-	resp, err := c.adminD2.SetCAProperty(ctx, &icertadmind2.SetCAPropertyRequest{
-		This:          &dcom.ORPCThis{Version: c.comVersion},
-		Authority:     caName,
-		PropertyID:    CR_PROP_TEMPLATES,
-		PropertyIndex: 0,
-		PropertyType:  PROPTYPE_STRING,
-		PropertyValue: blob,
-	}, dcom.WithIPID(c.ipidD2))
-	if err != nil {
-		return fmt.Errorf("SetCAProperty(CR_PROP_TEMPLATES) failed: %w", err)
-	}
-
-	if resp.Return != 0 {
-		hr := uint32(resp.Return)
-		if name, ok := hresultNames[hr]; ok {
-			return fmt.Errorf("SetCAProperty failed: 0x%08X %s", hr, name)
-		}
-		return fmt.Errorf("SetCAProperty failed: HRESULT 0x%08X", hr)
-	}
-
-	return nil
-}
-
-// decodeUTF16LE decodes a byte slice of UTF-16LE data to a Go string.
+// decodeUTF16LE decodes a UTF-16LE byte slice to a Go string.
 func decodeUTF16LE(b []byte) string {
-	if len(b) < 2 {
-		return ""
+	if len(b)%2 != 0 {
+		b = b[:len(b)-1]
 	}
 	u16 := make([]uint16, len(b)/2)
 	for i := range u16 {
 		u16[i] = binary.LittleEndian.Uint16(b[i*2:])
 	}
-	// Trim null terminators
-	for len(u16) > 0 && u16[len(u16)-1] == 0 {
+	// Trim null terminator if present.
+	if len(u16) > 0 && u16[len(u16)-1] == 0 {
 		u16 = u16[:len(u16)-1]
 	}
 	return string(utf16.Decode(u16))
+}
+
+// GetTemplates retrieves the list of enabled certificate templates from the CA.
+// Returns a slice of strings alternating between template name and OID:
+// [name1, oid1, name2, oid2, ...]
+func (a *AdminClient) GetTemplates(ctx context.Context, authority string) ([]string, error) {
+	if idx := strings.LastIndex(authority, "\\"); idx >= 0 {
+		authority = authority[idx+1:]
+	}
+
+	resp, err := a.client.CertAdminD2().GetCAProperty(ctx, &icertadmind2.GetCAPropertyRequest{
+		This:          &dcom.ORPCThis{Version: &dcom.COMVersion{MajorVersion: 5, MinorVersion: 7}},
+		Authority:     authority,
+		PropertyID:    crPropTemplates,
+		PropertyIndex: 0,
+		PropertyType:  propTypeString,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("GetCAProperty(CR_PROP_TEMPLATES) failed: %w", err)
+	}
+
+	if resp.PropertyValue == nil || len(resp.PropertyValue.Buffer) == 0 {
+		return nil, nil
+	}
+
+	// The blob is UTF-16LE encoded "name\nOID\nname\nOID\n..."
+	raw := decodeUTF16LE(resp.PropertyValue.Buffer)
+	lines := strings.Split(strings.TrimRight(raw, "\n"), "\n")
+
+	// Filter out empty strings.
+	var result []string
+	for _, l := range lines {
+		if l != "" {
+			result = append(result, l)
+		}
+	}
+	return result, nil
+}
+
+// EnableTemplate enables a certificate template on the CA by adding it to the
+// CR_PROP_TEMPLATES list. Requires ManageCA rights.
+func (a *AdminClient) EnableTemplate(ctx context.Context, authority, templateName, templateOID string) error {
+	if idx := strings.LastIndex(authority, "\\"); idx >= 0 {
+		authority = authority[idx+1:]
+	}
+
+	// Get current templates.
+	existing, err := a.GetTemplates(ctx, authority)
+	if err != nil {
+		return fmt.Errorf("failed to get current templates: %w", err)
+	}
+
+	// Check if already enabled.
+	for i := 0; i < len(existing)-1; i += 2 {
+		if strings.EqualFold(existing[i], templateName) {
+			return fmt.Errorf("template %q is already enabled", templateName)
+		}
+	}
+
+	// Build new blob: prepend new template entry.
+	newEntry := templateName + "\n" + templateOID + "\n"
+	var existing_str string
+	for _, s := range existing {
+		existing_str += s + "\n"
+	}
+	fullStr := newEntry + existing_str
+	blob := encodeUTF16LE(fullStr)
+
+	_, err = a.client.CertAdminD2().SetCAProperty(ctx, &icertadmind2.SetCAPropertyRequest{
+		This:          &dcom.ORPCThis{Version: &dcom.COMVersion{MajorVersion: 5, MinorVersion: 7}},
+		Authority:     authority,
+		PropertyID:    crPropTemplates,
+		PropertyIndex: 0,
+		PropertyType:  propTypeString,
+		PropertyValue: &csra.CertTransportBlob{
+			Length: uint32(len(blob)),
+			Buffer: blob,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("SetCAProperty(CR_PROP_TEMPLATES) failed: %w", err)
+	}
+
+	return nil
+}
+
+// DisableTemplate disables a certificate template on the CA by removing it from
+// the CR_PROP_TEMPLATES list. Requires ManageCA rights.
+func (a *AdminClient) DisableTemplate(ctx context.Context, authority, templateName string) error {
+	if idx := strings.LastIndex(authority, "\\"); idx >= 0 {
+		authority = authority[idx+1:]
+	}
+
+	// Get current templates.
+	existing, err := a.GetTemplates(ctx, authority)
+	if err != nil {
+		return fmt.Errorf("failed to get current templates: %w", err)
+	}
+
+	// Find and remove the template (name+OID pair).
+	found := false
+	var filtered []string
+	for i := 0; i < len(existing)-1; i += 2 {
+		if strings.EqualFold(existing[i], templateName) {
+			found = true
+			continue // Skip this pair.
+		}
+		filtered = append(filtered, existing[i], existing[i+1])
+	}
+	// Handle odd trailing element.
+	if len(existing)%2 == 1 {
+		filtered = append(filtered, existing[len(existing)-1])
+	}
+
+	if !found {
+		return fmt.Errorf("template %q not found in enabled templates", templateName)
+	}
+
+	// Build new blob.
+	var newStr string
+	for _, s := range filtered {
+		newStr += s + "\n"
+	}
+	blob := encodeUTF16LE(newStr)
+
+	_, err = a.client.CertAdminD2().SetCAProperty(ctx, &icertadmind2.SetCAPropertyRequest{
+		This:          &dcom.ORPCThis{Version: &dcom.COMVersion{MajorVersion: 5, MinorVersion: 7}},
+		Authority:     authority,
+		PropertyID:    crPropTemplates,
+		PropertyIndex: 0,
+		PropertyType:  propTypeString,
+		PropertyValue: &csra.CertTransportBlob{
+			Length: uint32(len(blob)),
+			Buffer: blob,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("SetCAProperty(CR_PROP_TEMPLATES) failed: %w", err)
+	}
+
+	return nil
 }

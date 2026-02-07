@@ -24,3 +24,9 @@ goertipy
 # OS
 .DS_Store
 Thumbs.db
+
+# Integration tests (contains creds and test output)
+tests/integration/output/
+
+# Template backups from ESC4
+*_backup.json
