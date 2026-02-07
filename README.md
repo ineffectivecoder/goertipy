@@ -21,13 +21,13 @@ An Active Directory Certificate Services (AD CS) enumeration and exploitation to
 ## Installation
 
 ```bash
-go install github.com/slacker/goertipy/cmd/goertipy@latest
+go install github.com/ineffectivecoder/goertipy/cmd/goertipy@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/slacker/goertipy.git
+git clone https://github.com/ineffectivecoder/goertipy.git
 cd goertipy
 go build -o goertipy ./cmd/goertipy
 ```

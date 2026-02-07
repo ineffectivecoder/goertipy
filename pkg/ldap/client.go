@@ -102,15 +102,8 @@ func Connect(opts Options) (*Client, error) {
 
 		if opts.NTHash != "" {
 			// NTLM hash authentication using pass-the-hash
-			ntBytes, err := hex.DecodeString(opts.NTHash)
-			if err != nil {
-				conn.Close()
-				return nil, fmt.Errorf("failed to decode NT hash: %w", err)
-			}
-
-			// Use NTLMv2 bind with the hash as the password equivalent
-			// The go-ldap library supports NTLM via NTLMBind
-			err = conn.NTLMBind(opts.Domain, opts.Username, string(ntBytes))
+			// NTLMBindWithHash accepts the NT hash as a hex string directly
+			err = conn.NTLMBindWithHash(opts.Domain, opts.Username, opts.NTHash)
 			if err != nil {
 				conn.Close()
 				return nil, fmt.Errorf("NTLM bind failed: %w", err)
