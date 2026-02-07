@@ -210,6 +210,13 @@ func (c *Client) SearchOne(baseDN string, scope int, filter string, attributes [
 	return entries[0], nil
 }
 
+// ModifyAttribute performs an LDAP modify operation on the specified DN
+func (c *Client) ModifyAttribute(dn string, mods []ldap.Change) error {
+	modReq := ldap.NewModifyRequest(dn, nil)
+	modReq.Changes = mods
+	return c.conn.Modify(modReq)
+}
+
 // Conn returns the underlying LDAP connection for advanced operations
 func (c *Client) Conn() *ldap.Conn {
 	return c.conn

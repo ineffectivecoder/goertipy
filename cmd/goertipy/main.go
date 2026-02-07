@@ -28,6 +28,7 @@ Similar to Certipy, but written in Go for portability and performance.`,
 	rootCmd.AddCommand(commands.NewCertCommand())
 	rootCmd.AddCommand(commands.NewCACommand())
 	rootCmd.AddCommand(commands.NewForgeCommand())
+	rootCmd.AddCommand(commands.NewTemplateCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
