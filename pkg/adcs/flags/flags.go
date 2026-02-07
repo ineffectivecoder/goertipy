@@ -1,0 +1,173 @@
+package flags
+
+// msPKI-Certificate-Name-Flag constants
+// Reference: [MS-CRTD] 2.4
+const (
+	// CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT - Enrollee can specify subject name
+	// This is the key flag for ESC1 vulnerability
+	CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT uint32 = 0x00000001
+
+	// CT_FLAG_ADD_EMAIL - Add email to subject
+	CT_FLAG_ADD_EMAIL uint32 = 0x00000002
+
+	// CT_FLAG_ADD_OBJ_GUID - Add objectGUID to subject
+	CT_FLAG_ADD_OBJ_GUID uint32 = 0x00000004
+
+	// CT_FLAG_OLD_CERT_SUPPLIES_SUBJECT_AND_ALT_NAME - Use old cert for subject
+	CT_FLAG_OLD_CERT_SUPPLIES_SUBJECT_AND_ALT_NAME uint32 = 0x00000008
+
+	// CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT_ALT_NAME - Enrollee supplies SAN
+	CT_FLAG_ENROLLEE_SUPPLIES_SUBJECT_ALT_NAME uint32 = 0x00010000
+
+	// CT_FLAG_SUBJECT_ALT_REQUIRE_DOMAIN_DNS - Require domain DNS in SAN
+	CT_FLAG_SUBJECT_ALT_REQUIRE_DOMAIN_DNS uint32 = 0x00400000
+
+	// CT_FLAG_SUBJECT_ALT_REQUIRE_DIRECTORY_GUID - Require directory GUID in SAN
+	CT_FLAG_SUBJECT_ALT_REQUIRE_DIRECTORY_GUID uint32 = 0x01000000
+
+	// CT_FLAG_SUBJECT_ALT_REQUIRE_UPN - Require UPN in SAN
+	CT_FLAG_SUBJECT_ALT_REQUIRE_UPN uint32 = 0x02000000
+
+	// CT_FLAG_SUBJECT_ALT_REQUIRE_EMAIL - Require email in SAN
+	CT_FLAG_SUBJECT_ALT_REQUIRE_EMAIL uint32 = 0x04000000
+
+	// CT_FLAG_SUBJECT_ALT_REQUIRE_DNS - Require DNS in SAN
+	CT_FLAG_SUBJECT_ALT_REQUIRE_DNS uint32 = 0x08000000
+
+	// CT_FLAG_SUBJECT_REQUIRE_DNS_AS_CN - Require DNS as CN
+	CT_FLAG_SUBJECT_REQUIRE_DNS_AS_CN uint32 = 0x10000000
+
+	// CT_FLAG_SUBJECT_REQUIRE_EMAIL - Require email in subject
+	CT_FLAG_SUBJECT_REQUIRE_EMAIL uint32 = 0x20000000
+
+	// CT_FLAG_SUBJECT_REQUIRE_COMMON_NAME - Require CN in subject
+	CT_FLAG_SUBJECT_REQUIRE_COMMON_NAME uint32 = 0x40000000
+
+	// CT_FLAG_SUBJECT_REQUIRE_DIRECTORY_PATH - Require directory path
+	CT_FLAG_SUBJECT_REQUIRE_DIRECTORY_PATH uint32 = 0x80000000
+
+	// CT_FLAG_NO_SECURITY_EXTENSION - No szOID_NTDS_CA_SECURITY_EXT (ESC9/16)
+	CT_FLAG_NO_SECURITY_EXTENSION uint32 = 0x00080000
+)
+
+// msPKI-Enrollment-Flag constants
+// Reference: [MS-CRTD] 2.26
+const (
+	// CT_FLAG_INCLUDE_SYMMETRIC_ALGORITHMS - Include symmetric algorithms
+	CT_FLAG_INCLUDE_SYMMETRIC_ALGORITHMS uint32 = 0x00000001
+
+	// CT_FLAG_PEND_ALL_REQUESTS - Manager approval required
+	CT_FLAG_PEND_ALL_REQUESTS uint32 = 0x00000002
+
+	// CT_FLAG_PUBLISH_TO_KRA_CONTAINER - Publish to KRA container
+	CT_FLAG_PUBLISH_TO_KRA_CONTAINER uint32 = 0x00000004
+
+	// CT_FLAG_PUBLISH_TO_DS - Publish certificate to AD
+	CT_FLAG_PUBLISH_TO_DS uint32 = 0x00000008
+
+	// CT_FLAG_AUTO_ENROLLMENT_CHECK_USER_DS_CERTIFICATE - Check user DS cert
+	CT_FLAG_AUTO_ENROLLMENT_CHECK_USER_DS_CERTIFICATE uint32 = 0x00000010
+
+	// CT_FLAG_AUTO_ENROLLMENT - Auto-enrollment enabled
+	CT_FLAG_AUTO_ENROLLMENT uint32 = 0x00000020
+
+	// CT_FLAG_PREVIOUS_APPROVAL_VALIDATE_REENROLLMENT - Validate reenrollment
+	CT_FLAG_PREVIOUS_APPROVAL_VALIDATE_REENROLLMENT uint32 = 0x00000040
+
+	// CT_FLAG_USER_INTERACTION_REQUIRED - User interaction required
+	CT_FLAG_USER_INTERACTION_REQUIRED uint32 = 0x00000100
+
+	// CT_FLAG_REMOVE_INVALID_CERTIFICATE_FROM_PERSONAL_STORE - Remove invalid certs
+	CT_FLAG_REMOVE_INVALID_CERTIFICATE_FROM_PERSONAL_STORE uint32 = 0x00000400
+
+	// CT_FLAG_ALLOW_ENROLL_ON_BEHALF_OF - Allow enrollment on behalf of
+	CT_FLAG_ALLOW_ENROLL_ON_BEHALF_OF uint32 = 0x00000800
+
+	// CT_FLAG_ADD_OCSP_NOCHECK - Add OCSP no-check extension
+	CT_FLAG_ADD_OCSP_NOCHECK uint32 = 0x00001000
+
+	// CT_FLAG_ENABLE_KEY_REUSE_ON_NT_TOKEN_KEYSET_STORAGE_FULL - Key reuse
+	CT_FLAG_ENABLE_KEY_REUSE_ON_NT_TOKEN_KEYSET_STORAGE_FULL uint32 = 0x00002000
+
+	// CT_FLAG_NOREVOCATIONINFOINISSUEDCERTS - No revocation info
+	CT_FLAG_NOREVOCATIONINFOINISSUEDCERTS uint32 = 0x00004000
+
+	// CT_FLAG_INCLUDE_BASIC_CONSTRAINTS_FOR_EE_CERTS - Include basic constraints
+	CT_FLAG_INCLUDE_BASIC_CONSTRAINTS_FOR_EE_CERTS uint32 = 0x00008000
+
+	// CT_FLAG_ALLOW_PREVIOUS_APPROVAL_KEYBASEDRENEWAL_VALIDATE_REENROLLMENT
+	CT_FLAG_ALLOW_PREVIOUS_APPROVAL_KEYBASEDRENEWAL_VALIDATE_REENROLLMENT uint32 = 0x00010000
+
+	// CT_FLAG_ISSUANCE_POLICIES_FROM_REQUEST - Issuance policies from request
+	CT_FLAG_ISSUANCE_POLICIES_FROM_REQUEST uint32 = 0x00020000
+
+	// CT_FLAG_SKIP_AUTO_RENEWAL - Skip auto renewal
+	CT_FLAG_SKIP_AUTO_RENEWAL uint32 = 0x00040000
+)
+
+// Extended Key Usage OIDs
+const (
+	// Authentication EKUs
+	EKU_CLIENT_AUTH        = "1.3.6.1.5.5.7.3.2"
+	EKU_SMART_CARD_LOGON   = "1.3.6.1.4.1.311.20.2.2"
+	EKU_PKINIT_CLIENT_AUTH = "1.3.6.1.5.2.3.4"
+	EKU_ANY_PURPOSE        = "2.5.29.37.0"
+	EKU_NO_EKU             = "" // No EKU defined
+
+	// Special EKUs
+	EKU_CERTIFICATE_REQUEST_AGENT = "1.3.6.1.4.1.311.20.2.1"
+	EKU_SERVER_AUTH               = "1.3.6.1.5.5.7.3.1"
+	EKU_CODE_SIGNING              = "1.3.6.1.5.5.7.3.3"
+
+	// SubCA
+	EKU_SUBORDINATE_CA = "1.3.6.1.4.1.311.76.6.1"
+)
+
+// EKU display names
+var EKUNames = map[string]string{
+	EKU_CLIENT_AUTH:               "Client Authentication",
+	EKU_SMART_CARD_LOGON:          "Smart Card Logon",
+	EKU_PKINIT_CLIENT_AUTH:        "PKINIT Client Authentication",
+	EKU_ANY_PURPOSE:               "Any Purpose",
+	EKU_CERTIFICATE_REQUEST_AGENT: "Certificate Request Agent",
+	EKU_SERVER_AUTH:               "Server Authentication",
+	EKU_CODE_SIGNING:              "Code Signing",
+	EKU_SUBORDINATE_CA:            "Subordinate CA",
+}
+
+// CA Configuration Flags (from ICertAdmin2::GetConfigEntry)
+// Reference: MS-CSRA 3.1.1.10
+const (
+	// EDITF_ATTRIBUTESUBJECTALTNAME2 - Allow SAN to be specified in requests (ESC6)
+	EDITF_ATTRIBUTESUBJECTALTNAME2 uint32 = 0x00040000
+)
+
+// CA Access Rights (from CA security descriptor)
+// Reference: MS-CSRA 2.2.1.5
+const (
+	CA_RIGHT_MANAGE_CA           uint32 = 0x00000001 // ManageCA permission
+	CA_RIGHT_MANAGE_CERTIFICATES uint32 = 0x00000002 // ManageCertificates (Issue and Manage Certificates)
+	CA_RIGHT_ENROLL              uint32 = 0x00000004 // Enroll
+	CA_RIGHT_AUTORENEW           uint32 = 0x00000008 // Auto-enroll
+)
+
+// OID link attribute for ESC13
+const (
+	// msPKI-OID-Attribute - attribute on OID objects pointing to group
+	MSPKI_RA_POLICIES = "msPKI-RA-Policies"
+)
+
+// IsAuthenticationEKU returns true if the OID allows authentication
+func IsAuthenticationEKU(oid string) bool {
+	switch oid {
+	case EKU_CLIENT_AUTH, EKU_SMART_CARD_LOGON, EKU_PKINIT_CLIENT_AUTH, EKU_ANY_PURPOSE:
+		return true
+	default:
+		return false
+	}
+}
+
+// HasFlag checks if a flag is set in a bitmask
+func HasFlag(value, flag uint32) bool {
+	return value&flag != 0
+}
