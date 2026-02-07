@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/slacker/goertipy/pkg/adcs"
 	goertipyldap "github.com/slacker/goertipy/pkg/ldap"
@@ -30,6 +31,11 @@ type FindFlags struct {
 	OutputText   bool
 	OutputStdout bool
 	NoColor      bool
+
+	// Report generation
+	Report     bool
+	ReportHTML bool
+	ReportPDF  bool
 
 	// Filtering
 	VulnerableOnly bool
@@ -75,6 +81,11 @@ identifies potential vulnerabilities (ESC1-ESC16).`,
 	cmd.Flags().BoolVar(&findFlags.OutputText, "text", true, "Output text format")
 	cmd.Flags().BoolVar(&findFlags.OutputStdout, "stdout", false, "Output to stdout only")
 	cmd.Flags().BoolVar(&findFlags.NoColor, "no-color", false, "Disable colored output")
+
+	// Report generation
+	cmd.Flags().BoolVar(&findFlags.Report, "report", false, "Generate Markdown pentest report")
+	cmd.Flags().BoolVar(&findFlags.ReportHTML, "report-html", false, "Generate HTML pentest report")
+	cmd.Flags().BoolVar(&findFlags.ReportPDF, "report-pdf", false, "Generate PDF pentest report (requires wkhtmltopdf or Chrome)")
 
 	// Filtering flags
 	cmd.Flags().BoolVar(&findFlags.VulnerableOnly, "vulnerable", false, "Only show vulnerable templates")
@@ -189,6 +200,63 @@ func runFind(cmd *cobra.Command, args []string) error {
 		formatter := output.NewTextFormatter(os.Stdout, !findFlags.NoColor)
 		if err := formatter.Format(result); err != nil {
 			return fmt.Errorf("failed to format text output: %w", err)
+		}
+	}
+
+	// Generate reports if requested
+	if findFlags.Report || findFlags.ReportHTML || findFlags.ReportPDF {
+		domainName := result.Domain
+		if findFlags.Domain != "" {
+			domainName = findFlags.Domain
+		}
+		if domainName == "" {
+			domainName = client.Domain()
+		}
+		// Parse domain from username (user@domain) as last resort
+		if domainName == "" {
+			if parts := strings.SplitN(findFlags.Username, "@", 2); len(parts) == 2 {
+				domainName = parts[1]
+			}
+		}
+		// Clean domain for filename
+		safeDomain := strings.ReplaceAll(domainName, ".", "_")
+
+		if findFlags.Report {
+			mdPath := safeDomain + "_report.md"
+			mdFile, err := os.Create(mdPath)
+			if err != nil {
+				return fmt.Errorf("failed to create report file: %w", err)
+			}
+			defer mdFile.Close()
+
+			formatter := output.NewReportFormatter(mdFile, domainName, findFlags.DCIP, false)
+			if err := formatter.Format(result); err != nil {
+				return fmt.Errorf("failed to generate Markdown report: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "[+] Markdown report saved: %s\n", mdPath)
+		}
+
+		if findFlags.ReportHTML {
+			htmlPath := safeDomain + "_report.html"
+			htmlFile, err := os.Create(htmlPath)
+			if err != nil {
+				return fmt.Errorf("failed to create HTML report file: %w", err)
+			}
+			defer htmlFile.Close()
+
+			formatter := output.NewReportFormatter(htmlFile, domainName, findFlags.DCIP, true)
+			if err := formatter.Format(result); err != nil {
+				return fmt.Errorf("failed to generate HTML report: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "[+] HTML report saved: %s\n", htmlPath)
+		}
+
+		if findFlags.ReportPDF {
+			pdfPath := safeDomain + "_report.pdf"
+			if err := output.GeneratePDF(result, domainName, findFlags.DCIP, pdfPath); err != nil {
+				return fmt.Errorf("failed to generate PDF report: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "[+] PDF report saved: %s\n", pdfPath)
 		}
 	}
 
