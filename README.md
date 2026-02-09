@@ -1,7 +1,7 @@
 # Goertipy
 
 <p align="center">
-  <img src="goertipy.jpg" alt="Goertipy" width="300">
+  <img src="certigo.jpg" alt="Goertipy" width="300">
 </p>
 
 An Active Directory Certificate Services (AD CS) enumeration and exploitation toolkit written in Go. Inspired by [Certipy](https://github.com/ly4k/Certipy), designed for portability and performance.
